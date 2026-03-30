@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Omzet & Forecast</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--blue-900:#0c2340;--blue-700:#1a3a5c;--blue-600:#1e4d7b;--blue-500:#2563eb;--blue-400:#3b82f6;--blue-100:#dbeafe;--blue-50:#eff6ff;--green-600:#16a34a;--green-500:#22c55e;--green-100:#dcfce7;--red-500:#ef4444;--red-100:#fee2e2;--gray-50:#f8fafc;--gray-100:#f1f5f9;--gray-200:#e2e8f0;--gray-300:#cbd5e7;--gray-400:#94a3b8;--gray-500:#64748b;--gray-600:#475569;--gray-700:#334155;--gray-800:#1e293b;--white:#fff;--shadow:0 1px 3px rgba(0,0,0,.1),0 1px 2px rgba(0,0,0,.06);--shadow-md:0 4px 6px -1px rgba(0,0,0,.1),0 2px 4px -2px rgba(0,0,0,.1);--shadow-lg:0 10px 15px -3px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.1);--radius:8px;--radius-lg:12px}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--gray-50);color:var(--gray-800);line-height:1.5;min-height:100vh}
+.header{background:linear-gradient(135deg,var(--blue-900),var(--blue-700));color:var(--white);padding:1.25rem 2rem;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;box-shadow:var(--shadow-lg)}
+.header h1{font-size:1.5rem;font-weight:700;letter-spacing:-.02em}
+.header-controls{display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
+.header select,.header button{padding:.5rem 1rem;border-radius:var(--radius);font-size:.875rem;cursor:pointer;border:none}
+.header select{background:rgba(255,255,255,.15);color:var(--white);font-weight:500}
+.header select option{color:var(--gray-800);background:var(--white)}
+.btn{display:inline-flex;align-items:center;gap:.375rem;padding:.5rem 1rem;border-radius:var(--radius);font-size:.8125rem;font-weight:600;cursor:pointer;border:none;transition:all .15s}
+.btn-primary{background:var(--blue-500);color:var(--white)}.btn-primary:hover{background:var(--blue-600)}
+.btn-success{background:var(--green-600);color:var(--white)}.btn-success:hover{background:#15803d}
+.btn-danger{background:var(--red-500);color:var(--white)}.btn-danger:hover{background:#dc2626}
+.btn-outline{background:var(--white);color:var(--blue-600);border:1.5px solid var(--blue-400)}.btn-outline:hover{background:var(--blue-50)}
+.btn-ghost{background:transparent;color:var(--white);border:1.5px solid rgba(255,255,255,.3)}.btn-ghost:hover{background:rgba(255,255,255,.1)}
+.btn-sm{padding:.3rem .6rem;font-size:.75rem}
+.btn-xs{padding:.2rem .4rem;font-size:.7rem}
+.container{max-width:1400px;margin:0 auto;padding:1.5rem}
+.dashboard{display:grid;grid-template-columns:1fr;gap:1.5rem;margin-bottom:2rem}
+.card{background:var(--white);border-radius:var(--radius-lg);box-shadow:var(--shadow);overflow:hidden}
+.card-header{padding:1rem 1.25rem;border-bottom:1px solid var(--gray-200);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem}
+.card-header h2{font-size:1.1rem;font-weight:700;color:var(--blue-900)}
+.card-body{padding:1.25rem}
+.chart-container{position:relative;height:300px;width:100%}
+.summary-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.75rem}
+.summary-item{background:var(--gray-50);border-radius:var(--radius);padding:.75rem;text-align:center;border:1px solid var(--gray-200)}
+.summary-item .label{font-size:.7rem;color:var(--gray-500);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:.25rem}
+.summary-item .value{font-size:1.05rem;font-weight:700;color:var(--blue-900)}
+.summary-item .value.green{color:var(--green-600)}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:.8125rem;min-width:700px}
+thead{background:var(--blue-900);color:var(--white)}
+th{padding:.6rem .5rem;text-align:left;font-weight:600;white-space:nowrap;font-size:.75rem;text-transform:uppercase;letter-spacing:.04em}
+td{padding:.45rem .5rem;border-bottom:1px solid var(--gray-100);vertical-align:middle}
+tbody tr:hover{background:var(--blue-50)}
+tbody tr:nth-child(even){background:var(--gray-50)}
+tbody tr:nth-child(even):hover{background:var(--blue-50)}
+tfoot{background:var(--blue-100);font-weight:700}
+tfoot td{padding:.6rem .5rem;border-top:2px solid var(--blue-400);color:var(--blue-900)}
+.money{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.money.positive{color:var(--green-600)}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+input[type="text"],input[type="number"],select{padding:.35rem .5rem;border:1.5px solid var(--gray-300);border-radius:6px;font-size:.8125rem;font-family:inherit;transition:border-color .15s;width:100%;min-width:0}
+input:focus,select:focus{outline:none;border-color:var(--blue-400);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+.input-narrow{max-width:80px}
+.input-medium{max-width:120px}
+.actions-cell{white-space:nowrap;display:flex;gap:.25rem}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:1000;padding:1rem;opacity:0;pointer-events:none;transition:opacity .2s}
+.modal-overlay.active{opacity:1;pointer-events:auto}
+.modal{background:var(--white);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);width:100%;max-width:520px;max-height:90vh;overflow-y:auto}
+.modal-header{padding:1rem 1.25rem;border-bottom:1px solid var(--gray-200);display:flex;justify-content:space-between;align-items:center}
+.modal-header h3{font-size:1rem;font-weight:700;color:var(--blue-900)}
+.modal-close{background:none;border:none;font-size:1.25rem;cursor:pointer;color:var(--gray-400);padding:.25rem}
+.modal-body{padding:1.25rem}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}
+.form-group{display:flex;flex-direction:column;gap:.25rem}
+.form-group.full{grid-column:1/-1}
+.form-group label{font-size:.75rem;font-weight:600;color:var(--gray-600)}
+.kans-badge{display:inline-block;padding:.15rem .5rem;border-radius:99px;font-size:.7rem;font-weight:700}
+.kans-high{background:var(--green-100);color:var(--green-600)}
+.kans-med{background:#fef3c7;color:#d97706}
+.kans-low{background:var(--red-100);color:var(--red-500)}
+.empty-state{text-align:center;padding:2rem;color:var(--gray-400);font-size:.875rem}
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;background:var(--blue-900);color:var(--white);padding:.75rem 1.25rem;border-radius:var(--radius);box-shadow:var(--shadow-lg);font-size:.875rem;z-index:2000;transform:translateY(100px);opacity:0;transition:all .3s}
+.toast.show{transform:translateY(0);opacity:1}
+@media(max-width:768px){
+.header{padding:1rem}.header h1{font-size:1.2rem}
+.container{padding:1rem}
+.form-grid{grid-template-columns:1fr}
+.summary-grid{grid-template-columns:repeat(2,1fr)}
+.chart-container{height:220px}
+table{font-size:.75rem}
+th,td{padding:.35rem .3rem}
+}
+@media(max-width:480px){
+.summary-grid{grid-template-columns:1fr 1fr}
+.btn{padding:.4rem .7rem;font-size:.75rem}
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📊 Omzet & Forecast</h1>
+  <div class="header-controls">
+    <select id="yearSelect" title="Jaar selecteren"></select>
+    <button class="btn btn-ghost" onclick="exportCSV('werkelijk')">⬇ CSV Werkelijk</button>
+    <button class="btn btn-ghost" onclick="exportCSV('forecast')">⬇ CSV Forecast</button>
+  </div>
+</div>
+
+<div class="container">
+  <!-- Dashboard -->
+  <div class="dashboard">
+    <div class="card">
+      <div class="card-header"><h2>📈 Maandoverzicht</h2></div>
+      <div class="card-body">
+        <div class="chart-container"><canvas id="monthlyChart"></canvas></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><h2>📋 Samenvatting per maand</h2></div>
+      <div class="card-body"><div id="summaryGrid" class="summary-grid"></div></div>
+    </div>
+  </div>
+
+  <!-- Werkelijke Opdrachten -->
+  <div class="card" style="margin-bottom:1.5rem">
+    <div class="card-header">
+      <h2>✅ Werkelijke Opdrachten</h2>
+      <button class="btn btn-primary" onclick="openModal('werkelijk')">+ Toevoegen</button>
+    </div>
+    <div class="table-wrap">
+      <table id="werkelijkTable">
+        <thead><tr>
+          <th>Project</th><th>Opdrachtgever</th><th class="num">Hoeveelheid</th><th>Eenheid</th>
+          <th class="money">Tarief</th><th class="money">Omzet</th><th class="money">Marge</th><th>Maand</th><th>Acties</th>
+        </tr></thead>
+        <tbody id="werkelijkBody"></tbody>
+        <tfoot id="werkelijkFoot"></tfoot>
+      </table>
+    </div>
+  </div>
+
+  <!-- Forecast -->
+  <div class="card">
+    <div class="card-header">
+      <h2>🔮 Forecast</h2>
+      <button class="btn btn-primary" onclick="openModal('forecast')">+ Toevoegen</button>
+    </div>
+    <div class="table-wrap">
+      <table id="forecastTable">
+        <thead><tr>
+          <th>Project</th><th>Opdrachtgever</th><th class="num">Hoeveelheid</th><th>Eenheid</th>
+          <th class="money">Tarief</th><th class="money">Omzet</th><th class="money">Marge</th><th>Maand</th>
+          <th>Kans</th><th class="money">Gew. Omzet</th><th class="money">Gew. Marge</th><th>Acties</th>
+        </tr></thead>
+        <tbody id="forecastBody"></tbody>
+        <tfoot id="forecastFoot"></tfoot>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modalOverlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modalTitle">Opdracht toevoegen</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <form id="entryForm" onsubmit="saveEntry(event)">
+        <input type="hidden" id="entryId">
+        <input type="hidden" id="entryType">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Projectnummer</label>
+            <input type="text" id="fProject" required>
+          </div>
+          <div class="form-group">
+            <label>Opdrachtgever</label>
+            <input type="text" id="fClient" required>
+          </div>
+          <div class="form-group">
+            <label>Hoeveelheid</label>
+            <input type="number" id="fQuantity" step="any" required>
+          </div>
+          <div class="form-group">
+            <label>Eenheid</label>
+            <select id="fUnit">
+              <option value="ton">ton</option>
+              <option value="kuub">kuub</option>
+              <option value="m³">m³</option>
+              <option value="stuks">stuks</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Tarief (€)</label>
+            <input type="number" id="fRate" step="any" required>
+          </div>
+          <div class="form-group">
+            <label>Marge (€)</label>
+            <input type="number" id="fMargin" step="any" required>
+          </div>
+          <div class="form-group">
+            <label>Maand</label>
+            <select id="fMonth">
+              <option value="januari">januari</option><option value="februari">februari</option>
+              <option value="maart">maart</option><option value="april">april</option>
+              <option value="mei">mei</option><option value="juni">juni</option>
+              <option value="juli">juli</option><option value="augustus">augustus</option>
+              <option value="september">september</option><option value="oktober">oktober</option>
+              <option value="november">november</option><option value="december">december</option>
+            </select>
+          </div>
+          <div class="form-group" id="kansGroup" style="display:none">
+            <label>Kans (%)</label>
+            <input type="number" id="fChance" min="0" max="100" value="50">
+          </div>
+        </div>
+        <div style="margin-top:1.25rem;display:flex;gap:.5rem;justify-content:flex-end">
+          <button type="button" class="btn btn-outline" onclick="closeModal()">Annuleren</button>
+          <button type="submit" class="btn btn-primary">Opslaan</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const MONTHS = ['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
+const STORAGE_KEY = 'omzet_forecast_data';
+
+let data = {};
+let currentYear = 2026;
+let chart = null;
+
+// ---- Data ----
+function defaultData() {
+  return {
+    werkelijk: [
+      {id:uid(),project:'2026130',client:'Grondbank GMG',quantity:3000,unit:'ton',rate:8,margin:7500,month:'april'},
+      {id:uid(),project:'2026033',client:'Paape',quantity:4000,unit:'kuub',rate:7.5,margin:8000,month:'april'},
+      {id:uid(),project:'2026112',client:'De Wilde',quantity:3000,unit:'kuub',rate:7.5,margin:9000,month:'april'},
+      {id:uid(),project:'2026053',client:'Bofa',quantity:6000,unit:'kuub',rate:1.5,margin:9000,month:'mei'},
+    ],
+    forecast: [
+      {id:uid(),project:'2026136',client:'Bovisie',quantity:18000,unit:'kuub',rate:15,margin:27000,month:'mei',chance:50},
+      {id:uid(),project:'2026140',client:'Van Aalsburg',quantity:3000,unit:'kuub',rate:10,margin:4500,month:'september',chance:80},
+      {id:uid(),project:'2025127',client:'Floris',quantity:1000,unit:'ton',rate:115,margin:50000,month:'mei',chance:80},
+    ]
+  };
+}
+
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
+
+function loadData(){
+  try{
+    const raw=localStorage.getItem(STORAGE_KEY);
+    if(raw) data=JSON.parse(raw); else data={};
+  }catch(e){data={}}
+  if(!data[currentYear]) data[currentYear]=defaultData();
+  if(!data[currentYear].werkelijk) data[currentYear].werkelijk=[];
+  if(!data[currentYear].forecast) data[currentYear].forecast=[];
+}
+
+function saveData(){
+  localStorage.setItem(STORAGE_KEY,JSON.stringify(data));
+}
+
+function yearData(){return data[currentYear]}
+
+// ---- Formatting ----
+function eur(n){
+  return new Intl.NumberFormat('nl-NL',{style:'currency',currency:'EUR',minimumFractionDigits:0,maximumFractionDigits:0}).format(n);
+}
+function eurFull(n){
+  return new Intl.NumberFormat('nl-NL',{style:'currency',currency:'EUR'}).format(n);
+}
+function num(n){return new Intl.NumberFormat('nl-NL').format(n)}
+
+// ---- Render ----
+function render(){
+  renderTable('werkelijk');
+  renderTable('forecast');
+  renderSummary();
+  renderChart();
+}
+
+function renderTable(type){
+  const items=yearData()[type];
+  const tbody=document.getElementById(type+'Body');
+  const tfoot=document.getElementById(type+'Foot');
+  const isForecast=type==='forecast';
+
+  if(!items.length){
+    tbody.innerHTML=`<tr><td colspan="${isForecast?12:9}" class="empty-state">Geen opdrachten. Klik "+ Toevoegen" om te beginnen.</td></tr>`;
+    tfoot.innerHTML='';
+    return;
+  }
+
+  let totOmzet=0,totMarge=0,totGewOmzet=0,totGewMarge=0;
+
+  tbody.innerHTML=items.map(r=>{
+    const omzet=r.quantity*r.rate;
+    totOmzet+=omzet; totMarge+=r.margin;
+    let forecastCols='';
+    if(isForecast){
+      const go=omzet*(r.chance/100);
+      const gm=r.margin*(r.chance/100);
+      totGewOmzet+=go; totGewMarge+=gm;
+      const klass=r.chance>=70?'kans-high':r.chance>=40?'kans-med':'kans-low';
+      forecastCols=`
+        <td><span class="kans-badge ${klass}">${r.chance}%</span></td>
+        <td class="money positive">${eur(go)}</td>
+        <td class="money positive">${eur(gm)}</td>`;
+    }
+    return `<tr>
+      <td><strong>${esc(r.project)}</strong></td>
+      <td>${esc(r.client)}</td>
+      <td class="num">${num(r.quantity)}</td>
+      <td>${esc(r.unit)}</td>
+      <td class="money">${eurFull(r.rate)}</td>
+      <td class="money">${eur(omzet)}</td>
+      <td class="money positive">${eur(r.margin)}</td>
+      <td>${esc(r.month)}</td>
+      ${forecastCols}
+      <td><div class="actions-cell">
+        ${isForecast?`<button class="btn btn-success btn-xs" onclick="convertToWerkelijk('${r.id}')" title="Omzetten naar werkelijk">✓ Omzetten</button>`:''}
+        <button class="btn btn-outline btn-xs" onclick="editEntry('${type}','${r.id}')" title="Bewerken">✏️</button>
+        <button class="btn btn-danger btn-xs" onclick="deleteEntry('${type}','${r.id}')" title="Verwijderen">🗑</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+
+  if(isForecast){
+    tfoot.innerHTML=`<tr>
+      <td colspan="5">Totaal</td>
+      <td class="money">${eur(totOmzet)}</td>
+      <td class="money">${eur(totMarge)}</td>
+      <td></td><td></td>
+      <td class="money">${eur(totGewOmzet)}</td>
+      <td class="money">${eur(totGewMarge)}</td>
+      <td></td>
+    </tr>`;
+  } else {
+    tfoot.innerHTML=`<tr>
+      <td colspan="5">Totaal</td>
+      <td class="money">${eur(totOmzet)}</td>
+      <td class="money">${eur(totMarge)}</td>
+      <td colspan="2"></td>
+    </tr>`;
+  }
+}
+
+function renderSummary(){
+  const yd=yearData();
+  const grid=document.getElementById('summaryGrid');
+  const monthMap={};
+  MONTHS.forEach(m=>monthMap[m]={wo:0,wm:0,fo:0,fm:0});
+
+  yd.werkelijk.forEach(r=>{
+    if(monthMap[r.month]!==undefined){
+      monthMap[r.month].wo+=r.quantity*r.rate;
+      monthMap[r.month].wm+=r.margin;
+    }
+  });
+  yd.forecast.forEach(r=>{
+    if(monthMap[r.month]!==undefined){
+      monthMap[r.month].fo+=r.quantity*r.rate*(r.chance/100);
+      monthMap[r.month].fm+=r.margin*(r.chance/100);
+    }
+  });
+
+  const active=MONTHS.filter(m=>{const d=monthMap[m];return d.wo||d.wm||d.fo||d.fm});
+  if(!active.length){
+    grid.innerHTML='<div class="empty-state" style="grid-column:1/-1">Geen data voor dit jaar.</div>';
+    return;
+  }
+
+  grid.innerHTML=active.map(m=>{
+    const d=monthMap[m];
+    return `<div class="summary-item">
+      <div class="label">${m}</div>
+      <div class="value">${eur(d.wo)}</div>
+      <div style="font-size:.65rem;color:var(--gray-500)">Werkelijk omzet</div>
+      <div class="value green" style="font-size:.85rem;margin-top:.25rem">${eur(d.wm)}</div>
+      <div style="font-size:.65rem;color:var(--gray-500)">Werkelijk marge</div>
+      ${d.fo?`<div style="margin-top:.35rem;border-top:1px dashed var(--gray-300);padding-top:.35rem">
+        <div class="value" style="font-size:.85rem;color:var(--blue-500)">${eur(d.fo)}</div>
+        <div style="font-size:.65rem;color:var(--gray-500)">Forecast omzet</div>
+        <div class="value green" style="font-size:.8rem">${eur(d.fm)}</div>
+        <div style="font-size:.65rem;color:var(--gray-500)">Forecast marge</div>
+      </div>`:''}
+    </div>`;
+  }).join('');
+}
+
+function renderChart(){
+  const yd=yearData();
+  const labels=[];
+  const wOmzet=[],wMarge=[],fOmzet=[],fMarge=[];
+
+  MONTHS.forEach(m=>{
+    let wo=0,wm=0,fo=0,fm=0;
+    yd.werkelijk.forEach(r=>{if(r.month===m){wo+=r.quantity*r.rate;wm+=r.margin}});
+    yd.forecast.forEach(r=>{if(r.month===m){fo+=r.quantity*r.rate*(r.chance/100);fm+=r.margin*(r.chance/100)}});
+    if(wo||wm||fo||fm){
+      labels.push(m.charAt(0).toUpperCase()+m.slice(1,3));
+      wOmzet.push(wo);wMarge.push(wm);fOmzet.push(fo);fMarge.push(fm);
+    }
+  });
+
+  if(chart) chart.destroy();
+  const ctx=document.getElementById('monthlyChart').getContext('2d');
+  chart=new Chart(ctx,{
+    type:'bar',
+    data:{
+      labels,
+      datasets:[
+        {label:'Werkelijk Omzet',data:wOmzet,backgroundColor:'rgba(37,99,235,.8)',borderRadius:4,barPercentage:.7},
+        {label:'Werkelijk Marge',data:wMarge,backgroundColor:'rgba(22,163,74,.8)',borderRadius:4,barPercentage:.7},
+        {label:'Forecast Omzet (gewogen)',data:fOmzet,backgroundColor:'rgba(37,99,235,.3)',borderRadius:4,barPercentage:.7},
+        {label:'Forecast Marge (gewogen)',data:fMarge,backgroundColor:'rgba(22,163,74,.3)',borderRadius:4,barPercentage:.7},
+      ]
+    },
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      plugins:{
+        legend:{position:'bottom',labels:{padding:16,usePointStyle:true,pointStyle:'rectRounded',font:{size:11}}},
+        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${eur(ctx.raw)}`}}
+      },
+      scales:{
+        y:{beginAtZero:true,ticks:{callback:v=>eur(v),font:{size:10}},grid:{color:'rgba(0,0,0,.05)'}},
+        x:{grid:{display:false},ticks:{font:{size:11}}}
+      }
+    }
+  });
+}
+
+// ---- Modal ----
+function openModal(type,item=null){
+  document.getElementById('entryType').value=type;
+  document.getElementById('modalTitle').textContent=item?'Opdracht bewerken':(type==='forecast'?'Forecast toevoegen':'Opdracht toevoegen');
+  const kg=document.getElementById('kansGroup');
+  kg.style.display=type==='forecast'?'flex':'none';
+
+  if(item){
+    document.getElementById('entryId').value=item.id;
+    document.getElementById('fProject').value=item.project;
+    document.getElementById('fClient').value=item.client;
+    document.getElementById('fQuantity').value=item.quantity;
+    document.getElementById('fUnit').value=item.unit;
+    document.getElementById('fRate').value=item.rate;
+    document.getElementById('fMargin').value=item.margin;
+    document.getElementById('fMonth').value=item.month;
+    if(type==='forecast') document.getElementById('fChance').value=item.chance||50;
+  } else {
+    document.getElementById('entryForm').reset();
+    document.getElementById('entryId').value='';
+    if(type==='forecast') document.getElementById('fChance').value=50;
+  }
+  document.getElementById('modalOverlay').classList.add('active');
+  document.getElementById('fProject').focus();
+}
+
+function closeModal(){document.getElementById('modalOverlay').classList.remove('active')}
+
+function saveEntry(e){
+  e.preventDefault();
+  const type=document.getElementById('entryType').value;
+  const id=document.getElementById('entryId').value;
+  const entry={
+    id:id||uid(),
+    project:document.getElementById('fProject').value.trim(),
+    client:document.getElementById('fClient').value.trim(),
+    quantity:parseFloat(document.getElementById('fQuantity').value)||0,
+    unit:document.getElementById('fUnit').value,
+    rate:parseFloat(document.getElementById('fRate').value)||0,
+    margin:parseFloat(document.getElementById('fMargin').value)||0,
+    month:document.getElementById('fMonth').value,
+  };
+  if(type==='forecast') entry.chance=parseInt(document.getElementById('fChance').value)||50;
+
+  const list=yearData()[type];
+  if(id){
+    const idx=list.findIndex(r=>r.id===id);
+    if(idx>=0) list[idx]=entry;
+  } else {
+    list.push(entry);
+  }
+  saveData();render();closeModal();
+  toast(id?'Opdracht bijgewerkt':'Opdracht toegevoegd');
+}
+
+// ---- Actions ----
+function editEntry(type,id){
+  const item=yearData()[type].find(r=>r.id===id);
+  if(item) openModal(type,item);
+}
+
+function deleteEntry(type,id){
+  if(!confirm('Weet je zeker dat je deze opdracht wilt verwijderen?')) return;
+  yearData()[type]=yearData()[type].filter(r=>r.id!==id);
+  saveData();render();
+  toast('Opdracht verwijderd');
+}
+
+function convertToWerkelijk(id){
+  const fc=yearData().forecast;
+  const idx=fc.findIndex(r=>r.id===id);
+  if(idx<0) return;
+  const item={...fc[idx]};
+  delete item.chance;
+  item.id=uid();
+  yearData().werkelijk.push(item);
+  fc.splice(idx,1);
+  saveData();render();
+  toast('Forecast omgezet naar werkelijke opdracht');
+}
+
+// ---- Export CSV ----
+function exportCSV(type){
+  const items=yearData()[type];
+  if(!items.length){toast('Geen data om te exporteren');return}
+  const isForecast=type==='forecast';
+  let headers=['Projectnummer','Opdrachtgever','Hoeveelheid','Eenheid','Tarief','Omzet','Marge','Maand'];
+  if(isForecast) headers.push('Kans (%)','Gewogen Omzet','Gewogen Marge');
+
+  const rows=items.map(r=>{
+    const omzet=r.quantity*r.rate;
+    let row=[r.project,r.client,r.quantity,r.unit,r.rate,omzet.toFixed(2),r.margin,r.month];
+    if(isForecast){
+      row.push(r.chance,(omzet*r.chance/100).toFixed(2),(r.margin*r.chance/100).toFixed(2));
+    }
+    return row.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(';');
+  });
+
+  const csv='\uFEFF'+[headers.join(';'),...rows].join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`${type}_${currentYear}.csv`;
+  a.click();
+  toast(`CSV ${type} geëxporteerd`);
+}
+
+// ---- Toast ----
+function toast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2500);
+}
+
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+// ---- Year Selector ----
+function initYearSelector(){
+  const sel=document.getElementById('yearSelect');
+  for(let y=2024;y<=2030;y++){
+    const o=document.createElement('option');
+    o.value=y;o.textContent=y;
+    if(y===currentYear) o.selected=true;
+    sel.appendChild(o);
+  }
+  sel.addEventListener('change',()=>{
+    currentYear=parseInt(sel.value);
+    loadData();render();
+  });
+}
+
+// ---- Init ----
+initYearSelector();
+loadData();
+render();
+</script>
+</body>
+</html>
