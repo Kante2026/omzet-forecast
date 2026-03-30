@@ -1,6 +1,16 @@
 <!DOCTYPE html>
 <html lang="nl">
 <head>
+<!--
+  =====================================================================
+  VEREISTE DATABASE MIGRATIE — Voer dit EENMALIG uit in Supabase SQL Editor:
+
+  ALTER TABLE werkelijk ADD COLUMN IF NOT EXISTS gebruiker text;
+  ALTER TABLE forecast ADD COLUMN IF NOT EXISTS gebruiker text;
+
+  Zonder deze kolommen werkt de gebruikersnaam-tracking niet.
+  =====================================================================
+-->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Omzet & Forecast</title>
@@ -49,7 +59,7 @@ tfoot td{padding:.6rem .5rem;border-top:2px solid var(--blue-400);color:var(--bl
 .money{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .money.positive{color:var(--green-600)}
 .num{text-align:right;font-variant-numeric:tabular-nums}
-input[type="text"],input[type="number"],select{padding:.35rem .5rem;border:1.5px solid var(--gray-300);border-radius:6px;font-size:.8125rem;font-family:inherit;transition:border-color .15s;width:100%;min-width:0}
+input[type="text"],input[type="number"],input[type="password"],select{padding:.35rem .5rem;border:1.5px solid var(--gray-300);border-radius:6px;font-size:.8125rem;font-family:inherit;transition:border-color .15s;width:100%;min-width:0}
 input:focus,select:focus{outline:none;border-color:var(--blue-400);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
 .input-narrow{max-width:80px}
 .input-medium{max-width:120px}
@@ -77,6 +87,17 @@ input:focus,select:focus{outline:none;border-color:var(--blue-400);box-shadow:0 
 .sync-connected{background:rgba(34,197,94,.2);color:#86efac}
 .sync-disconnected{background:rgba(239,68,68,.2);color:#fca5a5}
 .sync-loading{background:rgba(250,204,21,.2);color:#fde68a}
+.user-badge{display:inline-flex;align-items:center;gap:.4rem;padding:.3rem .8rem;border-radius:99px;font-size:.8rem;font-weight:600;cursor:pointer;transition:background .15s;background:rgba(255,255,255,.12);color:var(--white)}
+.user-badge:hover{background:rgba(255,255,255,.22)}
+.user-badge .role-icon{font-size:.9rem}
+.entry-user{font-size:.65rem;color:var(--gray-400);margin-top:1px}
+.lock-icon{font-size:.85rem;margin-left:.25rem;opacity:.6}
+.auth-modal-body{text-align:center;padding:2rem 1.5rem}
+.auth-modal-body h3{margin-bottom:.5rem;font-size:1.1rem;color:var(--blue-900)}
+.auth-modal-body p{margin-bottom:1.25rem;color:var(--gray-500);font-size:.875rem}
+.auth-modal-body input{max-width:280px;margin:0 auto .75rem;display:block;text-align:center;font-size:1rem;padding:.6rem .75rem}
+.auth-modal-body .btn{margin:0 auto;display:inline-flex}
+.auth-error{color:var(--red-500);font-size:.8rem;margin-top:.5rem;min-height:1.2em}
 @media(max-width:768px){
 .header{padding:1rem}.header h1{font-size:1.2rem}
 .container{padding:1rem}
@@ -95,8 +116,9 @@ th,td{padding:.35rem .3rem}
 <body>
 
 <div class="header">
-  <h1>📊 Omzet & Forecast <span id="syncIndicator" class="sync-indicator sync-loading">⏳ Verbinden...</span></h1>
+  <h1>🔒 📊 Omzet & Forecast <span id="syncIndicator" class="sync-indicator sync-loading">⏳ Verbinden...</span></h1>
   <div class="header-controls">
+    <div id="userBadge" class="user-badge" onclick="changeUsername()" title="Klik om naam te wijzigen"></div>
     <select id="yearSelect" title="Jaar selecteren"></select>
     <button class="btn btn-ghost" onclick="exportCSV('werkelijk')">⬇ CSV Werkelijk</button>
     <button class="btn btn-ghost" onclick="exportCSV('forecast')">⬇ CSV Forecast</button>
@@ -156,7 +178,7 @@ th,td{padding:.35rem .3rem}
   </div>
 </div>
 
-<!-- Modal -->
+<!-- Entry Modal -->
 <div class="modal-overlay" id="modalOverlay" onclick="if(event.target===this)closeModal()">
   <div class="modal">
     <div class="modal-header">
@@ -222,9 +244,44 @@ th,td{padding:.35rem .3rem}
   </div>
 </div>
 
+<!-- Toegangscode Modal -->
+<div class="modal-overlay" id="accessModal">
+  <div class="modal" style="max-width:400px">
+    <div class="auth-modal-body">
+      <h3>🔒 Toegangscode vereist</h3>
+      <p>Voer de toegangscode in om de app te gebruiken.</p>
+      <input type="password" id="accessCodeInput" placeholder="Toegangscode" onkeydown="if(event.key==='Enter')validateAccess()">
+      <div class="auth-error" id="accessError"></div>
+      <br>
+      <button class="btn btn-primary" onclick="validateAccess()">Doorgaan</button>
+    </div>
+  </div>
+</div>
+
+<!-- Gebruikersnaam Modal -->
+<div class="modal-overlay" id="usernameModal">
+  <div class="modal" style="max-width:400px">
+    <div class="auth-modal-body">
+      <h3>👤 Wat is je naam?</h3>
+      <p>Je naam wordt getoond bij opdrachten die je toevoegt.</p>
+      <input type="text" id="usernameInput" placeholder="Bijv. Bouwe" maxlength="30" onkeydown="if(event.key==='Enter')saveUsername()">
+      <div class="auth-error" id="usernameError"></div>
+      <br>
+      <button class="btn btn-primary" onclick="saveUsername()">Opslaan</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
+// =====================================================================
+// CONFIGURATIE — Pas deze waarden aan naar wens
+// =====================================================================
+const ACCESS_CODE = 'GROBA2026';                  // Toegangscode voor de app
+const ADMINS = ['Bouwe'];                          // Admin-gebruikers (case-insensitive)
+// =====================================================================
+
 const MONTHS = ['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
 
 // ---- Supabase Setup ----
@@ -236,6 +293,92 @@ let werkelijkData = [];
 let forecastData = [];
 let currentYear = 2026;
 let chart = null;
+let currentUser = '';
+let realtimeChannel = null;
+
+// ---- Gebruiker & Rollen ----
+function isAdmin() {
+  return ADMINS.some(a => a.toLowerCase() === currentUser.toLowerCase());
+}
+
+function getRoleBadge() {
+  return isAdmin() ? '👑 Admin' : '👤 Gebruiker';
+}
+
+function updateUserBadge() {
+  const el = document.getElementById('userBadge');
+  el.innerHTML = `<span class="role-icon">${isAdmin() ? '👑' : '👤'}</span> ${esc(currentUser)} <span style="font-size:.65rem;opacity:.7">${isAdmin() ? 'Admin' : 'Gebruiker'}</span>`;
+}
+
+// ---- Toegangscontrole ----
+function checkAccess() {
+  return new Promise((resolve) => {
+    if (localStorage.getItem('omzet_access_ok') === 'true') {
+      resolve();
+      return;
+    }
+    const modal = document.getElementById('accessModal');
+    modal.classList.add('active');
+    document.getElementById('accessCodeInput').focus();
+    // resolve wordt aangeroepen door validateAccess()
+    window._accessResolve = resolve;
+  });
+}
+
+function validateAccess() {
+  const input = document.getElementById('accessCodeInput').value.trim();
+  if (input === ACCESS_CODE) {
+    localStorage.setItem('omzet_access_ok', 'true');
+    document.getElementById('accessModal').classList.remove('active');
+    document.getElementById('accessError').textContent = '';
+    if (window._accessResolve) window._accessResolve();
+  } else {
+    document.getElementById('accessError').textContent = '❌ Onjuiste toegangscode';
+    document.getElementById('accessCodeInput').value = '';
+    document.getElementById('accessCodeInput').focus();
+  }
+}
+
+// ---- Gebruikersnaam ----
+function checkUsername() {
+  return new Promise((resolve) => {
+    const stored = localStorage.getItem('omzet_username');
+    if (stored) {
+      currentUser = stored;
+      updateUserBadge();
+      resolve();
+      return;
+    }
+    const modal = document.getElementById('usernameModal');
+    modal.classList.add('active');
+    document.getElementById('usernameInput').focus();
+    window._usernameResolve = resolve;
+  });
+}
+
+function saveUsername() {
+  const input = document.getElementById('usernameInput').value.trim();
+  if (!input) {
+    document.getElementById('usernameError').textContent = '❌ Voer een naam in';
+    return;
+  }
+  localStorage.setItem('omzet_username', input);
+  currentUser = input;
+  updateUserBadge();
+  document.getElementById('usernameModal').classList.remove('active');
+  document.getElementById('usernameError').textContent = '';
+  if (window._usernameResolve) window._usernameResolve();
+}
+
+function changeUsername() {
+  const newName = prompt('Wijzig je naam:', currentUser);
+  if (newName && newName.trim()) {
+    currentUser = newName.trim();
+    localStorage.setItem('omzet_username', currentUser);
+    updateUserBadge();
+    toast('Naam gewijzigd naar ' + currentUser);
+  }
+}
 
 // ---- Sync Indicator ----
 function setSyncStatus(status) {
@@ -264,6 +407,7 @@ function dbToJs(row, type) {
     omzet: Number(row.omzet) || 0,
     margin: Number(row.marge) || 0,
     month: row.maand || '',
+    gebruiker: row.gebruiker || '',
   };
   if (type === 'forecast') {
     obj.chance = Number(row.kans) || 50;
@@ -283,11 +427,11 @@ function jsToDb(entry, type) {
     tarief: entry.rate,
     marge: entry.margin,
     maand: entry.month,
+    gebruiker: currentUser,
   };
   if (type === 'forecast') {
     obj.kans = entry.chance;
   }
-  // Do NOT include omzet, gewogen_omzet, gewogen_marge - they are GENERATED columns
   return obj;
 }
 
@@ -306,7 +450,6 @@ async function loadData() {
     werkelijkData = wRes.data.map(r => dbToJs(r, 'werkelijk'));
     forecastData = fRes.data.map(r => dbToJs(r, 'forecast'));
 
-    // Pre-populate if both tables are completely empty (across all years)
     if (werkelijkData.length === 0 && forecastData.length === 0) {
       const [allW, allF] = await Promise.all([
         sb.from('werkelijk').select('id', { count: 'exact', head: true }),
@@ -314,7 +457,6 @@ async function loadData() {
       ]);
       if ((allW.count || 0) === 0 && (allF.count || 0) === 0) {
         await insertDefaultData();
-        // Re-fetch after inserting defaults
         const [wRes2, fRes2] = await Promise.all([
           sb.from('werkelijk').select('*').eq('jaar', currentYear).order('created_at', { ascending: true }),
           sb.from('forecast').select('*').eq('jaar', currentYear).order('created_at', { ascending: true }),
@@ -353,6 +495,56 @@ async function insertDefaultData() {
   if (fIns.error) console.error('Default forecast insert error:', fIns.error);
 }
 
+// ---- Realtime Subscriptions ----
+function setupRealtime() {
+  if (realtimeChannel) {
+    sb.removeChannel(realtimeChannel);
+  }
+
+  realtimeChannel = sb.channel('omzet-changes')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'werkelijk' }, (payload) => {
+      handleRealtimeChange('werkelijk', payload);
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'forecast' }, (payload) => {
+      handleRealtimeChange('forecast', payload);
+    })
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        console.log('Realtime verbonden');
+      } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+        console.warn('Realtime verbinding verloren, opnieuw verbinden...');
+        setTimeout(() => setupRealtime(), 3000);
+      }
+    });
+}
+
+async function handleRealtimeChange(table, payload) {
+  const eventType = payload.eventType;
+  const newRow = payload.new;
+  const oldRow = payload.old;
+
+  // Controleer of de wijziging van het huidige jaar is
+  if (newRow && newRow.jaar && newRow.jaar !== currentYear) return;
+  if (oldRow && oldRow.jaar && oldRow.jaar !== currentYear) return;
+
+  // Controleer of de wijziging van de huidige gebruiker is (dan hoeven we niet te refreshen)
+  const changeUser = (newRow && newRow.gebruiker) || '';
+  const isSelf = changeUser.toLowerCase() === currentUser.toLowerCase();
+
+  // Herlaad data
+  await loadData();
+  render();
+
+  // Toon toast alleen voor wijzigingen van andere gebruikers
+  if (!isSelf && changeUser) {
+    const typeLabel = table === 'werkelijk' ? 'werkelijk' : 'forecast';
+    const actionLabel = eventType === 'INSERT' ? 'toegevoegd' : eventType === 'UPDATE' ? 'bewerkt' : 'verwijderd';
+    toast(`📡 ${typeLabel} ${actionLabel} door ${changeUser}`);
+  } else if (!isSelf) {
+    toast('📡 Data bijgewerkt');
+  }
+}
+
 // ---- Formatting ----
 function eur(n) {
   return new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n);
@@ -379,6 +571,7 @@ function renderTable(type) {
   const tbody = document.getElementById(type + 'Body');
   const tfoot = document.getElementById(type + 'Foot');
   const isForecast = type === 'forecast';
+  const admin = isAdmin();
 
   if (!items.length) {
     tbody.innerHTML = `<tr><td colspan="${isForecast ? 12 : 9}" class="empty-state">Geen opdrachten. Klik "+ Toevoegen" om te beginnen.</td></tr>`;
@@ -404,8 +597,16 @@ function renderTable(type) {
         <td class="money positive">${eur(go)}</td>
         <td class="money positive">${eur(gm)}</td>`;
     }
+
+    const gebruikerLabel = r.gebruiker ? `<div class="entry-user">door: ${esc(r.gebruiker)}</div>` : '';
+
+    // Rechten: iedereen kan verwijderen, alleen admin kan bewerken/omzetten
+    const convertBtn = (isForecast && admin) ? `<button class="btn btn-success btn-xs" onclick="convertToWerkelijk('${r.id}')" title="Omzetten naar werkelijk">✓ Omzetten</button>` : '';
+    const editBtn = admin ? `<button class="btn btn-outline btn-xs" onclick="editEntry('${type}','${r.id}')" title="Bewerken">✏️</button>` : '';
+    const deleteBtn = `<button class="btn btn-danger btn-xs" onclick="deleteEntry('${type}','${r.id}')" title="Verwijderen">🗑</button>`;
+
     return `<tr>
-      <td><strong>${esc(r.project)}</strong></td>
+      <td><strong>${esc(r.project)}</strong>${gebruikerLabel}</td>
       <td>${esc(r.client)}</td>
       <td class="num">${num(r.quantity)}</td>
       <td>${esc(r.unit)}</td>
@@ -415,9 +616,7 @@ function renderTable(type) {
       <td>${esc(r.month)}</td>
       ${forecastCols}
       <td><div class="actions-cell">
-        ${isForecast ? `<button class="btn btn-success btn-xs" onclick="convertToWerkelijk('${r.id}')" title="Omzetten naar werkelijk">✓ Omzetten</button>` : ''}
-        <button class="btn btn-outline btn-xs" onclick="editEntry('${type}','${r.id}')" title="Bewerken">✏️</button>
-        <button class="btn btn-danger btn-xs" onclick="deleteEntry('${type}','${r.id}')" title="Verwijderen">🗑</button>
+        ${convertBtn}${editBtn}${deleteBtn}
       </div></td>
     </tr>`;
   }).join('');
@@ -528,6 +727,11 @@ function renderChart() {
 
 // ---- Modal ----
 function openModal(type, item = null) {
+  // Alleen admins mogen bewerken
+  if (item && !isAdmin()) {
+    toast('Alleen admins mogen opdrachten bewerken', true);
+    return;
+  }
   document.getElementById('entryType').value = type;
   document.getElementById('modalTitle').textContent = item ? 'Opdracht bewerken' : (type === 'forecast' ? 'Forecast toevoegen' : 'Opdracht toevoegen');
   const kg = document.getElementById('kansGroup');
@@ -558,6 +762,14 @@ async function saveEntry(e) {
   e.preventDefault();
   const type = document.getElementById('entryType').value;
   const id = document.getElementById('entryId').value;
+
+  // Dubbelcheck: alleen admins mogen bewerken
+  if (id && !isAdmin()) {
+    toast('Alleen admins mogen opdrachten bewerken', true);
+    closeModal();
+    return;
+  }
+
   const entry = {
     project: document.getElementById('fProject').value.trim(),
     client: document.getElementById('fClient').value.trim(),
@@ -574,17 +786,14 @@ async function saveEntry(e) {
   try {
     setSyncStatus('loading');
     if (id) {
-      // UPDATE
       const { data: updated, error } = await sb.from(type).update(dbRow).eq('id', id).select();
       if (error) throw error;
-      // Update local data
       const list = getItems(type);
       const idx = list.findIndex(r => r.id === id);
       if (idx >= 0 && updated && updated[0]) {
         list[idx] = dbToJs(updated[0], type);
       }
     } else {
-      // INSERT
       const { data: inserted, error } = await sb.from(type).insert(dbRow).select();
       if (error) throw error;
       if (inserted && inserted[0]) {
@@ -604,6 +813,10 @@ async function saveEntry(e) {
 
 // ---- Actions ----
 function editEntry(type, id) {
+  if (!isAdmin()) {
+    toast('Alleen admins mogen opdrachten bewerken', true);
+    return;
+  }
   const item = getItems(type).find(r => r.id === id);
   if (item) openModal(type, item);
 }
@@ -630,12 +843,15 @@ async function deleteEntry(type, id) {
 }
 
 async function convertToWerkelijk(id) {
+  if (!isAdmin()) {
+    toast('Alleen admins mogen forecast omzetten', true);
+    return;
+  }
   const fcItem = forecastData.find(r => r.id === id);
   if (!fcItem) return;
 
   try {
     setSyncStatus('loading');
-    // Insert into werkelijk (without chance/forecast fields)
     const werkelijkRow = {
       jaar: currentYear,
       projectnummer: fcItem.project,
@@ -645,16 +861,15 @@ async function convertToWerkelijk(id) {
       tarief: fcItem.rate,
       marge: fcItem.margin,
       maand: fcItem.month,
+      gebruiker: currentUser,
     };
 
     const { data: inserted, error: insErr } = await sb.from('werkelijk').insert(werkelijkRow).select();
     if (insErr) throw insErr;
 
-    // Delete from forecast
     const { error: delErr } = await sb.from('forecast').delete().eq('id', id);
     if (delErr) throw delErr;
 
-    // Update local data
     if (inserted && inserted[0]) {
       werkelijkData.push(dbToJs(inserted[0], 'werkelijk'));
     }
@@ -675,12 +890,12 @@ function exportCSV(type) {
   const items = getItems(type);
   if (!items.length) { toast('Geen data om te exporteren'); return; }
   const isForecast = type === 'forecast';
-  let headers = ['Projectnummer', 'Opdrachtgever', 'Hoeveelheid', 'Eenheid', 'Tarief', 'Omzet', 'Marge', 'Maand'];
+  let headers = ['Projectnummer', 'Opdrachtgever', 'Hoeveelheid', 'Eenheid', 'Tarief', 'Omzet', 'Marge', 'Maand', 'Gebruiker'];
   if (isForecast) headers.push('Kans (%)', 'Gewogen Omzet', 'Gewogen Marge');
 
   const rows = items.map(r => {
     const omzet = r.omzet || (r.quantity * r.rate);
-    let row = [r.project, r.client, r.quantity, r.unit, r.rate, omzet.toFixed(2), r.margin, r.month];
+    let row = [r.project, r.client, r.quantity, r.unit, r.rate, omzet.toFixed(2), r.margin, r.month, r.gebruiker || ''];
     if (isForecast) {
       const go = r.gewogen_omzet || (omzet * r.chance / 100);
       const gm = r.gewogen_marge || (r.margin * r.chance / 100);
@@ -727,8 +942,19 @@ function initYearSelector() {
 // ---- Init ----
 (async function init() {
   initYearSelector();
+
+  // Stap 1: Toegangscode controleren
+  await checkAccess();
+
+  // Stap 2: Gebruikersnaam ophalen/vragen
+  await checkUsername();
+
+  // Stap 3: Data laden en renderen
   await loadData();
   render();
+
+  // Stap 4: Realtime subscriptions starten
+  setupRealtime();
 })();
 </script>
 </body>
