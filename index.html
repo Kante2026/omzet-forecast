@@ -644,6 +644,7 @@ function renderTable(type) {
 
     // Rechten: iedereen kan verwijderen, alleen admin kan bewerken/omzetten
     const convertBtn = (isForecast && admin) ? `<button class="btn btn-success btn-xs" onclick="convertToWerkelijk('${r.id}')" title="Omzetten naar werkelijk">✓ Omzetten</button>` : '';
+    const revertBtn = (!isForecast && admin) ? `<button class="btn btn-outline btn-xs" onclick="convertToForecast('${r.id}')" title="Terugzetten naar forecast" style="border-color:#f59e0b;color:#d97706">↩ Terug</button>` : '';
     const editBtn = admin ? `<button class="btn btn-outline btn-xs" onclick="editEntry('${type}','${r.id}')" title="Bewerken">✏️</button>` : '';
     const deleteBtn = `<button class="btn btn-danger btn-xs" onclick="deleteEntry('${type}','${r.id}')" title="Verwijderen">🗑</button>`;
 
@@ -658,7 +659,7 @@ function renderTable(type) {
       <td>${esc(r.month)}</td>
       ${forecastCols}
       <td><div class="actions-cell">
-        ${convertBtn}${editBtn}${deleteBtn}
+        ${convertBtn}${revertBtn}${editBtn}${deleteBtn}
       </div></td>
     </tr>`;
   }).join('');
@@ -924,6 +925,52 @@ async function convertToWerkelijk(id) {
     console.error('Convert error:', err);
     setSyncStatus('error');
     toast('Fout bij omzetten: ' + (err.message || 'onbekende fout'), true);
+  }
+}
+
+async function convertToForecast(id) {
+  if (!isAdmin()) {
+    toast('Alleen admins mogen opdrachten terugzetten', true);
+    return;
+  }
+  const wItem = werkelijkData.find(r => r.id === id);
+  if (!wItem) return;
+
+  if (!confirm('Weet je zeker dat je deze opdracht wilt terugzetten naar forecast?')) return;
+
+  try {
+    setSyncStatus('loading');
+    const forecastRow = {
+      jaar: currentYear,
+      projectnummer: wItem.project,
+      opdrachtgever: wItem.client,
+      hoeveelheid: wItem.quantity,
+      eenheid: wItem.unit,
+      tarief: wItem.rate,
+      marge: wItem.margin,
+      maand: wItem.month,
+      kans: 50,
+      gebruiker: currentUser,
+    };
+
+    const { data: inserted, error: insErr } = await sb.from('forecast').insert(forecastRow).select();
+    if (insErr) throw insErr;
+
+    const { error: delErr } = await sb.from('werkelijk').delete().eq('id', id);
+    if (delErr) throw delErr;
+
+    if (inserted && inserted[0]) {
+      forecastData.push(dbToJs(inserted[0], 'forecast'));
+    }
+    werkelijkData = werkelijkData.filter(r => r.id !== id);
+
+    setSyncStatus('connected');
+    render();
+    toast('Opdracht teruggezet naar forecast (kans: 50%)');
+  } catch (err) {
+    console.error('Revert error:', err);
+    setSyncStatus('error');
+    toast('Fout bij terugzetten: ' + (err.message || 'onbekende fout'), true);
   }
 }
 
