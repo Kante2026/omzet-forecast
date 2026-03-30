@@ -187,7 +187,7 @@ th,td{padding:.35rem .3rem}
       <table id="werkelijkTable">
         <thead><tr>
           <th>Project</th><th>Opdrachtgever</th><th class="num">Hoeveelheid</th><th>Eenheid</th>
-          <th class="money">Tarief</th><th class="money">Omzet</th><th class="money">Marge</th><th>Maand</th><th>Acties</th>
+          <th class="money">Tarief</th><th class="money">Omzet</th><th class="money">Marge</th><th>Maand</th><th>Ingevoerd door</th><th>Acties</th>
         </tr></thead>
         <tbody id="werkelijkBody"></tbody>
         <tfoot id="werkelijkFoot"></tfoot>
@@ -205,7 +205,7 @@ th,td{padding:.35rem .3rem}
       <table id="forecastTable">
         <thead><tr>
           <th>Project</th><th>Opdrachtgever</th><th class="num">Hoeveelheid</th><th>Eenheid</th>
-          <th class="money">Tarief</th><th class="money">Omzet</th><th class="money">Marge</th><th>Maand</th>
+          <th class="money">Tarief</th><th class="money">Omzet</th><th class="money">Marge</th><th>Maand</th><th>Ingevoerd door</th>
           <th>Kans</th><th class="money">Gew. Omzet</th><th class="money">Gew. Marge</th><th>Acties</th>
         </tr></thead>
         <tbody id="forecastBody"></tbody>
@@ -649,7 +649,7 @@ function renderTable(type) {
     const deleteBtn = `<button class="btn btn-danger btn-xs" onclick="deleteEntry('${type}','${r.id}')" title="Verwijderen">🗑</button>`;
 
     return `<tr>
-      <td><strong>${esc(r.project)}</strong>${gebruikerLabel}</td>
+      <td><strong>${esc(r.project)}</strong></td>
       <td>${esc(r.client)}</td>
       <td class="num">${num(r.quantity)}</td>
       <td>${esc(r.unit)}</td>
@@ -657,6 +657,7 @@ function renderTable(type) {
       <td class="money">${eur(omzet)}</td>
       <td class="money positive">${eur(r.margin)}</td>
       <td>${esc(r.month)}</td>
+      <td>${r.gebruiker ? esc(r.gebruiker) : '-'}</td>
       ${forecastCols}
       <td><div class="actions-cell">
         ${convertBtn}${revertBtn}${editBtn}${deleteBtn}
@@ -669,7 +670,7 @@ function renderTable(type) {
       <td colspan="5">Totaal</td>
       <td class="money">${eur(totOmzet)}</td>
       <td class="money">${eur(totMarge)}</td>
-      <td></td><td></td>
+      <td></td><td></td><td></td>
       <td class="money">${eur(totGewOmzet)}</td>
       <td class="money">${eur(totGewMarge)}</td>
       <td></td>
@@ -679,7 +680,7 @@ function renderTable(type) {
       <td colspan="5">Totaal</td>
       <td class="money">${eur(totOmzet)}</td>
       <td class="money">${eur(totMarge)}</td>
-      <td colspan="2"></td>
+      <td colspan="3"></td>
     </tr>`;
   }
 }
