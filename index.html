@@ -84,6 +84,26 @@ input:focus,select:focus{outline:none;border-color:var(--blue-400);box-shadow:0 
 .toast.show{transform:translateY(0);opacity:1}
 .toast.error{background:var(--red-500)}
 .sync-indicator{display:inline-flex;align-items:center;gap:.35rem;font-size:.8rem;font-weight:500;padding:.25rem .6rem;border-radius:99px;margin-left:.5rem}
+/* Presence / Online indicator */
+.presence-wrapper{position:relative}
+.presence-indicator{display:inline-flex;align-items:center;gap:.4rem;padding:.3rem .75rem;border-radius:99px;font-size:.8rem;font-weight:600;cursor:pointer;transition:background .15s;background:rgba(255,255,255,.12);color:var(--white);user-select:none}
+.presence-indicator:hover{background:rgba(255,255,255,.22)}
+.presence-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;animation:pulse-dot 2s ease-in-out infinite}
+@keyframes pulse-dot{0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}50%{box-shadow:0 0 0 5px rgba(34,197,94,0)}}
+.presence-label{white-space:nowrap}
+.presence-dropdown{position:absolute;top:calc(100% + 8px);right:0;background:var(--white);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);min-width:200px;max-width:280px;z-index:900;opacity:0;pointer-events:none;transform:translateY(-6px);transition:all .2s}
+.presence-dropdown.open{opacity:1;pointer-events:auto;transform:translateY(0)}
+.presence-dropdown-header{padding:.6rem .85rem;border-bottom:1px solid var(--gray-200);font-size:.75rem;font-weight:700;color:var(--blue-900);text-transform:uppercase;letter-spacing:.04em}
+.presence-dropdown-list{padding:.35rem 0;max-height:220px;overflow-y:auto}
+.presence-user{display:flex;align-items:center;gap:.5rem;padding:.4rem .85rem;font-size:.8125rem;color:var(--gray-700)}
+.presence-user .presence-dot{width:7px;height:7px;flex-shrink:0}
+.presence-user-name{font-weight:600}
+.presence-user-role{font-size:.7rem;color:var(--gray-400);margin-left:auto}
+.presence-empty{padding:.75rem .85rem;font-size:.8rem;color:var(--gray-400);text-align:center}
+/* Presence toasts */
+.presence-toast{position:fixed;bottom:1.5rem;left:1.5rem;background:var(--blue-900);color:var(--white);padding:.6rem 1rem;border-radius:var(--radius);box-shadow:var(--shadow-lg);font-size:.8125rem;z-index:2000;transform:translateX(-120%);opacity:0;transition:all .35s;pointer-events:none}
+.presence-toast.show{transform:translateX(0);opacity:1}
+@media(max-width:768px){.presence-label-text{display:none}}
 .sync-connected{background:rgba(34,197,94,.2);color:#86efac}
 .sync-disconnected{background:rgba(239,68,68,.2);color:#fca5a5}
 .sync-loading{background:rgba(250,204,21,.2);color:#fde68a}
@@ -118,6 +138,18 @@ th,td{padding:.35rem .3rem}
 <div class="header">
   <h1>🔒 📊 Omzet & Forecast <span id="syncIndicator" class="sync-indicator sync-loading">⏳ Verbinden...</span></h1>
   <div class="header-controls">
+    <div class="presence-wrapper" id="presenceWrapper">
+      <div class="presence-indicator" id="presenceIndicator" onclick="togglePresenceDropdown()" title="Online gebruikers">
+        <span class="presence-dot"></span>
+        <span class="presence-label"><span id="presenceCount">0</span> <span class="presence-label-text">online</span></span>
+      </div>
+      <div class="presence-dropdown" id="presenceDropdown">
+        <div class="presence-dropdown-header">Online gebruikers</div>
+        <div class="presence-dropdown-list" id="presenceList">
+          <div class="presence-empty">Niemand online</div>
+        </div>
+      </div>
+    </div>
     <div id="userBadge" class="user-badge" onclick="changeUsername()" title="Klik om naam te wijzigen"></div>
     <select id="yearSelect" title="Jaar selecteren"></select>
     <button class="btn btn-ghost" onclick="exportCSV('werkelijk')">⬇ CSV Werkelijk</button>
@@ -272,6 +304,7 @@ th,td{padding:.35rem .3rem}
   </div>
 </div>
 
+<div class="presence-toast" id="presenceToast"></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -295,6 +328,10 @@ let currentYear = 2026;
 let chart = null;
 let currentUser = '';
 let realtimeChannel = null;
+let presenceChannel = null;
+let presenceUsers = {};  // { presenceRef: { user, role } }
+let presenceToastQueue = [];
+let presenceToastActive = false;
 
 // ---- Gebruiker & Rollen ----
 function isAdmin() {
@@ -939,6 +976,140 @@ function initYearSelector() {
   });
 }
 
+// ---- Presence (Online Gebruikers) ----
+function setupPresence() {
+  if (presenceChannel) {
+    sb.removeChannel(presenceChannel);
+  }
+
+  presenceChannel = sb.channel('online-users', {
+    config: { presence: { key: currentUser } }
+  });
+
+  presenceChannel
+    .on('presence', { event: 'sync' }, () => {
+      const state = presenceChannel.presenceState();
+      presenceUsers = {};
+      Object.entries(state).forEach(([key, presences]) => {
+        presences.forEach(p => {
+          presenceUsers[p.presence_ref] = { user: p.user || key, role: p.role || 'gebruiker' };
+        });
+      });
+      renderPresence();
+    })
+    .on('presence', { event: 'join' }, ({ key, newPresences }) => {
+      newPresences.forEach(p => {
+        const name = p.user || key;
+        if (name.toLowerCase() !== currentUser.toLowerCase()) {
+          queuePresenceToast(`👋 ${name} is online`);
+        }
+      });
+    })
+    .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
+      leftPresences.forEach(p => {
+        const name = p.user || key;
+        if (name.toLowerCase() !== currentUser.toLowerCase()) {
+          queuePresenceToast(`${name} is offline`);
+        }
+      });
+    })
+    .subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        await presenceChannel.track({
+          user: currentUser,
+          role: isAdmin() ? 'admin' : 'gebruiker',
+          online_at: new Date().toISOString()
+        });
+      }
+    });
+
+  // Cleanup on tab close
+  window.addEventListener('beforeunload', () => {
+    if (presenceChannel) {
+      presenceChannel.untrack();
+    }
+  });
+}
+
+function renderPresence() {
+  // Get unique users
+  const seen = new Set();
+  const users = [];
+  Object.values(presenceUsers).forEach(p => {
+    const key = p.user.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      users.push(p);
+    }
+  });
+
+  document.getElementById('presenceCount').textContent = users.length;
+
+  const list = document.getElementById('presenceList');
+  if (users.length === 0) {
+    list.innerHTML = '<div class="presence-empty">Niemand online</div>';
+    return;
+  }
+
+  list.innerHTML = users.map(u => `
+    <div class="presence-user">
+      <span class="presence-dot"></span>
+      <span class="presence-user-name">${esc(u.user)}</span>
+      <span class="presence-user-role">${u.role === 'admin' ? '👑' : '👤'} ${esc(u.role)}</span>
+    </div>
+  `).join('');
+}
+
+function togglePresenceDropdown() {
+  const dd = document.getElementById('presenceDropdown');
+  dd.classList.toggle('open');
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', (e) => {
+  const wrapper = document.getElementById('presenceWrapper');
+  if (wrapper && !wrapper.contains(e.target)) {
+    document.getElementById('presenceDropdown').classList.remove('open');
+  }
+});
+
+function queuePresenceToast(msg) {
+  presenceToastQueue.push(msg);
+  if (!presenceToastActive) showNextPresenceToast();
+}
+
+function showNextPresenceToast() {
+  if (presenceToastQueue.length === 0) {
+    presenceToastActive = false;
+    return;
+  }
+  presenceToastActive = true;
+  const msg = presenceToastQueue.shift();
+  const el = document.getElementById('presenceToast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => showNextPresenceToast(), 350);
+  }, 2500);
+}
+
+// Update presence when username changes
+const _origChangeUsername = changeUsername;
+changeUsername = function() {
+  const oldName = currentUser;
+  _origChangeUsername();
+  if (currentUser !== oldName && presenceChannel) {
+    presenceChannel.untrack().then(() => {
+      presenceChannel.track({
+        user: currentUser,
+        role: isAdmin() ? 'admin' : 'gebruiker',
+        online_at: new Date().toISOString()
+      });
+    });
+  }
+};
+
 // ---- Init ----
 (async function init() {
   initYearSelector();
@@ -955,6 +1126,9 @@ function initYearSelector() {
 
   // Stap 4: Realtime subscriptions starten
   setupRealtime();
+
+  // Stap 5: Presence tracking starten
+  setupPresence();
 })();
 </script>
 </body>
