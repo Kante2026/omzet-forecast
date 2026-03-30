@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Omzet & Forecast</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{--blue-900:#0c2340;--blue-700:#1a3a5c;--blue-600:#1e4d7b;--blue-500:#2563eb;--blue-400:#3b82f6;--blue-100:#dbeafe;--blue-50:#eff6ff;--green-600:#16a34a;--green-500:#22c55e;--green-100:#dcfce7;--red-500:#ef4444;--red-100:#fee2e2;--gray-50:#f8fafc;--gray-100:#f1f5f9;--gray-200:#e2e8f0;--gray-300:#cbd5e7;--gray-400:#94a3b8;--gray-500:#64748b;--gray-600:#475569;--gray-700:#334155;--gray-800:#1e293b;--white:#fff;--shadow:0 1px 3px rgba(0,0,0,.1),0 1px 2px rgba(0,0,0,.06);--shadow-md:0 4px 6px -1px rgba(0,0,0,.1),0 2px 4px -2px rgba(0,0,0,.1);--shadow-lg:0 10px 15px -3px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.1);--radius:8px;--radius-lg:12px}
@@ -71,6 +72,11 @@ input:focus,select:focus{outline:none;border-color:var(--blue-400);box-shadow:0 
 .empty-state{text-align:center;padding:2rem;color:var(--gray-400);font-size:.875rem}
 .toast{position:fixed;bottom:1.5rem;right:1.5rem;background:var(--blue-900);color:var(--white);padding:.75rem 1.25rem;border-radius:var(--radius);box-shadow:var(--shadow-lg);font-size:.875rem;z-index:2000;transform:translateY(100px);opacity:0;transition:all .3s}
 .toast.show{transform:translateY(0);opacity:1}
+.toast.error{background:var(--red-500)}
+.sync-indicator{display:inline-flex;align-items:center;gap:.35rem;font-size:.8rem;font-weight:500;padding:.25rem .6rem;border-radius:99px;margin-left:.5rem}
+.sync-connected{background:rgba(34,197,94,.2);color:#86efac}
+.sync-disconnected{background:rgba(239,68,68,.2);color:#fca5a5}
+.sync-loading{background:rgba(250,204,21,.2);color:#fde68a}
 @media(max-width:768px){
 .header{padding:1rem}.header h1{font-size:1.2rem}
 .container{padding:1rem}
@@ -89,7 +95,7 @@ th,td{padding:.35rem .3rem}
 <body>
 
 <div class="header">
-  <h1>📊 Omzet & Forecast</h1>
+  <h1>📊 Omzet & Forecast <span id="syncIndicator" class="sync-indicator sync-loading">⏳ Verbinden...</span></h1>
   <div class="header-controls">
     <select id="yearSelect" title="Jaar selecteren"></select>
     <button class="btn btn-ghost" onclick="exportCSV('werkelijk')">⬇ CSV Werkelijk</button>
@@ -220,88 +226,180 @@ th,td{padding:.35rem .3rem}
 
 <script>
 const MONTHS = ['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
-const STORAGE_KEY = 'omzet_forecast_data';
 
-let data = {};
+// ---- Supabase Setup ----
+const SUPABASE_URL = 'https://xmzwebhiljgsxrtfbfvz.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhtendlYmhpbGpnc3hydGZiZnZ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ4NzU5MzQsImV4cCI6MjA5MDQ1MTkzNH0.4ODgu2S8D0EiFnnk27z2CZRMHEEvcGQWH9zcXZfM9HQ';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+let werkelijkData = [];
+let forecastData = [];
 let currentYear = 2026;
 let chart = null;
 
-// ---- Data ----
-function defaultData() {
-  return {
-    werkelijk: [
-      {id:uid(),project:'2026130',client:'Grondbank GMG',quantity:3000,unit:'ton',rate:8,margin:7500,month:'april'},
-      {id:uid(),project:'2026033',client:'Paape',quantity:4000,unit:'kuub',rate:7.5,margin:8000,month:'april'},
-      {id:uid(),project:'2026112',client:'De Wilde',quantity:3000,unit:'kuub',rate:7.5,margin:9000,month:'april'},
-      {id:uid(),project:'2026053',client:'Bofa',quantity:6000,unit:'kuub',rate:1.5,margin:9000,month:'mei'},
-    ],
-    forecast: [
-      {id:uid(),project:'2026136',client:'Bovisie',quantity:18000,unit:'kuub',rate:15,margin:27000,month:'mei',chance:50},
-      {id:uid(),project:'2026140',client:'Van Aalsburg',quantity:3000,unit:'kuub',rate:10,margin:4500,month:'september',chance:80},
-      {id:uid(),project:'2025127',client:'Floris',quantity:1000,unit:'ton',rate:115,margin:50000,month:'mei',chance:80},
-    ]
+// ---- Sync Indicator ----
+function setSyncStatus(status) {
+  const el = document.getElementById('syncIndicator');
+  if (status === 'connected') {
+    el.className = 'sync-indicator sync-connected';
+    el.textContent = '☁️ Verbonden';
+  } else if (status === 'error') {
+    el.className = 'sync-indicator sync-disconnected';
+    el.textContent = '⚠️ Offline';
+  } else {
+    el.className = 'sync-indicator sync-loading';
+    el.textContent = '⏳ Laden...';
+  }
+}
+
+// ---- DB → JS field mapping ----
+function dbToJs(row, type) {
+  const obj = {
+    id: row.id,
+    project: row.projectnummer || '',
+    client: row.opdrachtgever || '',
+    quantity: Number(row.hoeveelheid) || 0,
+    unit: row.eenheid || 'kuub',
+    rate: Number(row.tarief) || 0,
+    omzet: Number(row.omzet) || 0,
+    margin: Number(row.marge) || 0,
+    month: row.maand || '',
   };
+  if (type === 'forecast') {
+    obj.chance = Number(row.kans) || 50;
+    obj.gewogen_omzet = Number(row.gewogen_omzet) || 0;
+    obj.gewogen_marge = Number(row.gewogen_marge) || 0;
+  }
+  return obj;
 }
 
-function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
-
-function loadData(){
-  try{
-    const raw=localStorage.getItem(STORAGE_KEY);
-    if(raw) data=JSON.parse(raw); else data={};
-  }catch(e){data={}}
-  if(!data[currentYear]) data[currentYear]=defaultData();
-  if(!data[currentYear].werkelijk) data[currentYear].werkelijk=[];
-  if(!data[currentYear].forecast) data[currentYear].forecast=[];
+function jsToDb(entry, type) {
+  const obj = {
+    jaar: currentYear,
+    projectnummer: entry.project,
+    opdrachtgever: entry.client,
+    hoeveelheid: entry.quantity,
+    eenheid: entry.unit,
+    tarief: entry.rate,
+    marge: entry.margin,
+    maand: entry.month,
+  };
+  if (type === 'forecast') {
+    obj.kans = entry.chance;
+  }
+  // Do NOT include omzet, gewogen_omzet, gewogen_marge - they are GENERATED columns
+  return obj;
 }
 
-function saveData(){
-  localStorage.setItem(STORAGE_KEY,JSON.stringify(data));
+// ---- Data Loading ----
+async function loadData() {
+  setSyncStatus('loading');
+  try {
+    const [wRes, fRes] = await Promise.all([
+      sb.from('werkelijk').select('*').eq('jaar', currentYear).order('created_at', { ascending: true }),
+      sb.from('forecast').select('*').eq('jaar', currentYear).order('created_at', { ascending: true }),
+    ]);
+
+    if (wRes.error) throw wRes.error;
+    if (fRes.error) throw fRes.error;
+
+    werkelijkData = wRes.data.map(r => dbToJs(r, 'werkelijk'));
+    forecastData = fRes.data.map(r => dbToJs(r, 'forecast'));
+
+    // Pre-populate if both tables are completely empty (across all years)
+    if (werkelijkData.length === 0 && forecastData.length === 0) {
+      const [allW, allF] = await Promise.all([
+        sb.from('werkelijk').select('id', { count: 'exact', head: true }),
+        sb.from('forecast').select('id', { count: 'exact', head: true }),
+      ]);
+      if ((allW.count || 0) === 0 && (allF.count || 0) === 0) {
+        await insertDefaultData();
+        // Re-fetch after inserting defaults
+        const [wRes2, fRes2] = await Promise.all([
+          sb.from('werkelijk').select('*').eq('jaar', currentYear).order('created_at', { ascending: true }),
+          sb.from('forecast').select('*').eq('jaar', currentYear).order('created_at', { ascending: true }),
+        ]);
+        if (!wRes2.error) werkelijkData = wRes2.data.map(r => dbToJs(r, 'werkelijk'));
+        if (!fRes2.error) forecastData = fRes2.data.map(r => dbToJs(r, 'forecast'));
+      }
+    }
+
+    setSyncStatus('connected');
+  } catch (err) {
+    console.error('Supabase load error:', err);
+    setSyncStatus('error');
+    toast('Fout bij laden van data: ' + (err.message || 'onbekende fout'), true);
+  }
 }
 
-function yearData(){return data[currentYear]}
+async function insertDefaultData() {
+  const defaultWerkelijk = [
+    { jaar: 2026, projectnummer: '2026130', opdrachtgever: 'Grondbank GMG', hoeveelheid: 3000, eenheid: 'ton', tarief: 8, marge: 7500, maand: 'april' },
+    { jaar: 2026, projectnummer: '2026033', opdrachtgever: 'Paape', hoeveelheid: 4000, eenheid: 'kuub', tarief: 7.5, marge: 8000, maand: 'april' },
+    { jaar: 2026, projectnummer: '2026112', opdrachtgever: 'De Wilde', hoeveelheid: 3000, eenheid: 'kuub', tarief: 7.5, marge: 9000, maand: 'april' },
+    { jaar: 2026, projectnummer: '2026053', opdrachtgever: 'Bofa', hoeveelheid: 6000, eenheid: 'kuub', tarief: 1.5, marge: 9000, maand: 'mei' },
+  ];
+  const defaultForecast = [
+    { jaar: 2026, projectnummer: '2026136', opdrachtgever: 'Bovisie', hoeveelheid: 18000, eenheid: 'kuub', tarief: 15, marge: 27000, maand: 'mei', kans: 50 },
+    { jaar: 2026, projectnummer: '2026140', opdrachtgever: 'Van Aalsburg', hoeveelheid: 3000, eenheid: 'kuub', tarief: 10, marge: 4500, maand: 'september', kans: 80 },
+    { jaar: 2026, projectnummer: '2025127', opdrachtgever: 'Floris', hoeveelheid: 1000, eenheid: 'ton', tarief: 115, marge: 50000, maand: 'mei', kans: 80 },
+  ];
+
+  const [wIns, fIns] = await Promise.all([
+    sb.from('werkelijk').insert(defaultWerkelijk),
+    sb.from('forecast').insert(defaultForecast),
+  ]);
+  if (wIns.error) console.error('Default werkelijk insert error:', wIns.error);
+  if (fIns.error) console.error('Default forecast insert error:', fIns.error);
+}
 
 // ---- Formatting ----
-function eur(n){
-  return new Intl.NumberFormat('nl-NL',{style:'currency',currency:'EUR',minimumFractionDigits:0,maximumFractionDigits:0}).format(n);
+function eur(n) {
+  return new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n);
 }
-function eurFull(n){
-  return new Intl.NumberFormat('nl-NL',{style:'currency',currency:'EUR'}).format(n);
+function eurFull(n) {
+  return new Intl.NumberFormat('nl-NL', { style: 'currency', currency: 'EUR' }).format(n);
 }
-function num(n){return new Intl.NumberFormat('nl-NL').format(n)}
+function num(n) { return new Intl.NumberFormat('nl-NL').format(n); }
 
 // ---- Render ----
-function render(){
+function render() {
   renderTable('werkelijk');
   renderTable('forecast');
   renderSummary();
   renderChart();
 }
 
-function renderTable(type){
-  const items=yearData()[type];
-  const tbody=document.getElementById(type+'Body');
-  const tfoot=document.getElementById(type+'Foot');
-  const isForecast=type==='forecast';
+function getItems(type) {
+  return type === 'werkelijk' ? werkelijkData : forecastData;
+}
 
-  if(!items.length){
-    tbody.innerHTML=`<tr><td colspan="${isForecast?12:9}" class="empty-state">Geen opdrachten. Klik "+ Toevoegen" om te beginnen.</td></tr>`;
-    tfoot.innerHTML='';
+function renderTable(type) {
+  const items = getItems(type);
+  const tbody = document.getElementById(type + 'Body');
+  const tfoot = document.getElementById(type + 'Foot');
+  const isForecast = type === 'forecast';
+
+  if (!items.length) {
+    tbody.innerHTML = `<tr><td colspan="${isForecast ? 12 : 9}" class="empty-state">Geen opdrachten. Klik "+ Toevoegen" om te beginnen.</td></tr>`;
+    tfoot.innerHTML = '';
     return;
   }
 
-  let totOmzet=0,totMarge=0,totGewOmzet=0,totGewMarge=0;
+  let totOmzet = 0, totMarge = 0, totGewOmzet = 0, totGewMarge = 0;
 
-  tbody.innerHTML=items.map(r=>{
-    const omzet=r.quantity*r.rate;
-    totOmzet+=omzet; totMarge+=r.margin;
-    let forecastCols='';
-    if(isForecast){
-      const go=omzet*(r.chance/100);
-      const gm=r.margin*(r.chance/100);
-      totGewOmzet+=go; totGewMarge+=gm;
-      const klass=r.chance>=70?'kans-high':r.chance>=40?'kans-med':'kans-low';
-      forecastCols=`
+  tbody.innerHTML = items.map(r => {
+    const omzet = r.omzet || (r.quantity * r.rate);
+    totOmzet += omzet;
+    totMarge += r.margin;
+    let forecastCols = '';
+    if (isForecast) {
+      const go = r.gewogen_omzet || (omzet * (r.chance / 100));
+      const gm = r.gewogen_marge || (r.margin * (r.chance / 100));
+      totGewOmzet += go;
+      totGewMarge += gm;
+      const klass = r.chance >= 70 ? 'kans-high' : r.chance >= 40 ? 'kans-med' : 'kans-low';
+      forecastCols = `
         <td><span class="kans-badge ${klass}">${r.chance}%</span></td>
         <td class="money positive">${eur(go)}</td>
         <td class="money positive">${eur(gm)}</td>`;
@@ -317,15 +415,15 @@ function renderTable(type){
       <td>${esc(r.month)}</td>
       ${forecastCols}
       <td><div class="actions-cell">
-        ${isForecast?`<button class="btn btn-success btn-xs" onclick="convertToWerkelijk('${r.id}')" title="Omzetten naar werkelijk">✓ Omzetten</button>`:''}
+        ${isForecast ? `<button class="btn btn-success btn-xs" onclick="convertToWerkelijk('${r.id}')" title="Omzetten naar werkelijk">✓ Omzetten</button>` : ''}
         <button class="btn btn-outline btn-xs" onclick="editEntry('${type}','${r.id}')" title="Bewerken">✏️</button>
         <button class="btn btn-danger btn-xs" onclick="deleteEntry('${type}','${r.id}')" title="Verwijderen">🗑</button>
       </div></td>
     </tr>`;
   }).join('');
 
-  if(isForecast){
-    tfoot.innerHTML=`<tr>
+  if (isForecast) {
+    tfoot.innerHTML = `<tr>
       <td colspan="5">Totaal</td>
       <td class="money">${eur(totOmzet)}</td>
       <td class="money">${eur(totMarge)}</td>
@@ -335,7 +433,7 @@ function renderTable(type){
       <td></td>
     </tr>`;
   } else {
-    tfoot.innerHTML=`<tr>
+    tfoot.innerHTML = `<tr>
       <td colspan="5">Totaal</td>
       <td class="money">${eur(totOmzet)}</td>
       <td class="money">${eur(totMarge)}</td>
@@ -344,227 +442,294 @@ function renderTable(type){
   }
 }
 
-function renderSummary(){
-  const yd=yearData();
-  const grid=document.getElementById('summaryGrid');
-  const monthMap={};
-  MONTHS.forEach(m=>monthMap[m]={wo:0,wm:0,fo:0,fm:0});
+function renderSummary() {
+  const grid = document.getElementById('summaryGrid');
+  const monthMap = {};
+  MONTHS.forEach(m => monthMap[m] = { wo: 0, wm: 0, fo: 0, fm: 0 });
 
-  yd.werkelijk.forEach(r=>{
-    if(monthMap[r.month]!==undefined){
-      monthMap[r.month].wo+=r.quantity*r.rate;
-      monthMap[r.month].wm+=r.margin;
+  werkelijkData.forEach(r => {
+    if (monthMap[r.month] !== undefined) {
+      monthMap[r.month].wo += r.omzet || (r.quantity * r.rate);
+      monthMap[r.month].wm += r.margin;
     }
   });
-  yd.forecast.forEach(r=>{
-    if(monthMap[r.month]!==undefined){
-      monthMap[r.month].fo+=r.quantity*r.rate*(r.chance/100);
-      monthMap[r.month].fm+=r.margin*(r.chance/100);
+  forecastData.forEach(r => {
+    if (monthMap[r.month] !== undefined) {
+      monthMap[r.month].fo += r.gewogen_omzet || (r.quantity * r.rate * (r.chance / 100));
+      monthMap[r.month].fm += r.gewogen_marge || (r.margin * (r.chance / 100));
     }
   });
 
-  const active=MONTHS.filter(m=>{const d=monthMap[m];return d.wo||d.wm||d.fo||d.fm});
-  if(!active.length){
-    grid.innerHTML='<div class="empty-state" style="grid-column:1/-1">Geen data voor dit jaar.</div>';
+  const active = MONTHS.filter(m => { const d = monthMap[m]; return d.wo || d.wm || d.fo || d.fm; });
+  if (!active.length) {
+    grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1">Geen data voor dit jaar.</div>';
     return;
   }
 
-  grid.innerHTML=active.map(m=>{
-    const d=monthMap[m];
+  grid.innerHTML = active.map(m => {
+    const d = monthMap[m];
     return `<div class="summary-item">
       <div class="label">${m}</div>
       <div class="value">${eur(d.wo)}</div>
       <div style="font-size:.65rem;color:var(--gray-500)">Werkelijk omzet</div>
       <div class="value green" style="font-size:.85rem;margin-top:.25rem">${eur(d.wm)}</div>
       <div style="font-size:.65rem;color:var(--gray-500)">Werkelijk marge</div>
-      ${d.fo?`<div style="margin-top:.35rem;border-top:1px dashed var(--gray-300);padding-top:.35rem">
+      ${d.fo ? `<div style="margin-top:.35rem;border-top:1px dashed var(--gray-300);padding-top:.35rem">
         <div class="value" style="font-size:.85rem;color:var(--blue-500)">${eur(d.fo)}</div>
         <div style="font-size:.65rem;color:var(--gray-500)">Forecast omzet</div>
         <div class="value green" style="font-size:.8rem">${eur(d.fm)}</div>
         <div style="font-size:.65rem;color:var(--gray-500)">Forecast marge</div>
-      </div>`:''}
+      </div>` : ''}
     </div>`;
   }).join('');
 }
 
-function renderChart(){
-  const yd=yearData();
-  const labels=[];
-  const wOmzet=[],wMarge=[],fOmzet=[],fMarge=[];
+function renderChart() {
+  const labels = [];
+  const wOmzet = [], wMarge = [], fOmzet = [], fMarge = [];
 
-  MONTHS.forEach(m=>{
-    let wo=0,wm=0,fo=0,fm=0;
-    yd.werkelijk.forEach(r=>{if(r.month===m){wo+=r.quantity*r.rate;wm+=r.margin}});
-    yd.forecast.forEach(r=>{if(r.month===m){fo+=r.quantity*r.rate*(r.chance/100);fm+=r.margin*(r.chance/100)}});
-    if(wo||wm||fo||fm){
-      labels.push(m.charAt(0).toUpperCase()+m.slice(1,3));
-      wOmzet.push(wo);wMarge.push(wm);fOmzet.push(fo);fMarge.push(fm);
+  MONTHS.forEach(m => {
+    let wo = 0, wm = 0, fo = 0, fm = 0;
+    werkelijkData.forEach(r => { if (r.month === m) { wo += r.omzet || (r.quantity * r.rate); wm += r.margin; } });
+    forecastData.forEach(r => { if (r.month === m) { fo += r.gewogen_omzet || (r.quantity * r.rate * (r.chance / 100)); fm += r.gewogen_marge || (r.margin * (r.chance / 100)); } });
+    if (wo || wm || fo || fm) {
+      labels.push(m.charAt(0).toUpperCase() + m.slice(1, 3));
+      wOmzet.push(wo); wMarge.push(wm); fOmzet.push(fo); fMarge.push(fm);
     }
   });
 
-  if(chart) chart.destroy();
-  const ctx=document.getElementById('monthlyChart').getContext('2d');
-  chart=new Chart(ctx,{
-    type:'bar',
-    data:{
+  if (chart) chart.destroy();
+  const ctx = document.getElementById('monthlyChart').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'bar',
+    data: {
       labels,
-      datasets:[
-        {label:'Werkelijk Omzet',data:wOmzet,backgroundColor:'rgba(37,99,235,.8)',borderRadius:4,barPercentage:.7},
-        {label:'Werkelijk Marge',data:wMarge,backgroundColor:'rgba(22,163,74,.8)',borderRadius:4,barPercentage:.7},
-        {label:'Forecast Omzet (gewogen)',data:fOmzet,backgroundColor:'rgba(37,99,235,.3)',borderRadius:4,barPercentage:.7},
-        {label:'Forecast Marge (gewogen)',data:fMarge,backgroundColor:'rgba(22,163,74,.3)',borderRadius:4,barPercentage:.7},
+      datasets: [
+        { label: 'Werkelijk Omzet', data: wOmzet, backgroundColor: 'rgba(37,99,235,.8)', borderRadius: 4, barPercentage: .7 },
+        { label: 'Werkelijk Marge', data: wMarge, backgroundColor: 'rgba(22,163,74,.8)', borderRadius: 4, barPercentage: .7 },
+        { label: 'Forecast Omzet (gewogen)', data: fOmzet, backgroundColor: 'rgba(37,99,235,.3)', borderRadius: 4, barPercentage: .7 },
+        { label: 'Forecast Marge (gewogen)', data: fMarge, backgroundColor: 'rgba(22,163,74,.3)', borderRadius: 4, barPercentage: .7 },
       ]
     },
-    options:{
-      responsive:true,
-      maintainAspectRatio:false,
-      plugins:{
-        legend:{position:'bottom',labels:{padding:16,usePointStyle:true,pointStyle:'rectRounded',font:{size:11}}},
-        tooltip:{callbacks:{label:ctx=>`${ctx.dataset.label}: ${eur(ctx.raw)}`}}
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'bottom', labels: { padding: 16, usePointStyle: true, pointStyle: 'rectRounded', font: { size: 11 } } },
+        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${eur(ctx.raw)}` } }
       },
-      scales:{
-        y:{beginAtZero:true,ticks:{callback:v=>eur(v),font:{size:10}},grid:{color:'rgba(0,0,0,.05)'}},
-        x:{grid:{display:false},ticks:{font:{size:11}}}
+      scales: {
+        y: { beginAtZero: true, ticks: { callback: v => eur(v), font: { size: 10 } }, grid: { color: 'rgba(0,0,0,.05)' } },
+        x: { grid: { display: false }, ticks: { font: { size: 11 } } }
       }
     }
   });
 }
 
 // ---- Modal ----
-function openModal(type,item=null){
-  document.getElementById('entryType').value=type;
-  document.getElementById('modalTitle').textContent=item?'Opdracht bewerken':(type==='forecast'?'Forecast toevoegen':'Opdracht toevoegen');
-  const kg=document.getElementById('kansGroup');
-  kg.style.display=type==='forecast'?'flex':'none';
+function openModal(type, item = null) {
+  document.getElementById('entryType').value = type;
+  document.getElementById('modalTitle').textContent = item ? 'Opdracht bewerken' : (type === 'forecast' ? 'Forecast toevoegen' : 'Opdracht toevoegen');
+  const kg = document.getElementById('kansGroup');
+  kg.style.display = type === 'forecast' ? 'flex' : 'none';
 
-  if(item){
-    document.getElementById('entryId').value=item.id;
-    document.getElementById('fProject').value=item.project;
-    document.getElementById('fClient').value=item.client;
-    document.getElementById('fQuantity').value=item.quantity;
-    document.getElementById('fUnit').value=item.unit;
-    document.getElementById('fRate').value=item.rate;
-    document.getElementById('fMargin').value=item.margin;
-    document.getElementById('fMonth').value=item.month;
-    if(type==='forecast') document.getElementById('fChance').value=item.chance||50;
+  if (item) {
+    document.getElementById('entryId').value = item.id;
+    document.getElementById('fProject').value = item.project;
+    document.getElementById('fClient').value = item.client;
+    document.getElementById('fQuantity').value = item.quantity;
+    document.getElementById('fUnit').value = item.unit;
+    document.getElementById('fRate').value = item.rate;
+    document.getElementById('fMargin').value = item.margin;
+    document.getElementById('fMonth').value = item.month;
+    if (type === 'forecast') document.getElementById('fChance').value = item.chance || 50;
   } else {
     document.getElementById('entryForm').reset();
-    document.getElementById('entryId').value='';
-    if(type==='forecast') document.getElementById('fChance').value=50;
+    document.getElementById('entryId').value = '';
+    if (type === 'forecast') document.getElementById('fChance').value = 50;
   }
   document.getElementById('modalOverlay').classList.add('active');
   document.getElementById('fProject').focus();
 }
 
-function closeModal(){document.getElementById('modalOverlay').classList.remove('active')}
+function closeModal() { document.getElementById('modalOverlay').classList.remove('active'); }
 
-function saveEntry(e){
+async function saveEntry(e) {
   e.preventDefault();
-  const type=document.getElementById('entryType').value;
-  const id=document.getElementById('entryId').value;
-  const entry={
-    id:id||uid(),
-    project:document.getElementById('fProject').value.trim(),
-    client:document.getElementById('fClient').value.trim(),
-    quantity:parseFloat(document.getElementById('fQuantity').value)||0,
-    unit:document.getElementById('fUnit').value,
-    rate:parseFloat(document.getElementById('fRate').value)||0,
-    margin:parseFloat(document.getElementById('fMargin').value)||0,
-    month:document.getElementById('fMonth').value,
+  const type = document.getElementById('entryType').value;
+  const id = document.getElementById('entryId').value;
+  const entry = {
+    project: document.getElementById('fProject').value.trim(),
+    client: document.getElementById('fClient').value.trim(),
+    quantity: parseFloat(document.getElementById('fQuantity').value) || 0,
+    unit: document.getElementById('fUnit').value,
+    rate: parseFloat(document.getElementById('fRate').value) || 0,
+    margin: parseFloat(document.getElementById('fMargin').value) || 0,
+    month: document.getElementById('fMonth').value,
   };
-  if(type==='forecast') entry.chance=parseInt(document.getElementById('fChance').value)||50;
+  if (type === 'forecast') entry.chance = parseInt(document.getElementById('fChance').value) || 50;
 
-  const list=yearData()[type];
-  if(id){
-    const idx=list.findIndex(r=>r.id===id);
-    if(idx>=0) list[idx]=entry;
-  } else {
-    list.push(entry);
+  const dbRow = jsToDb(entry, type);
+
+  try {
+    setSyncStatus('loading');
+    if (id) {
+      // UPDATE
+      const { data: updated, error } = await sb.from(type).update(dbRow).eq('id', id).select();
+      if (error) throw error;
+      // Update local data
+      const list = getItems(type);
+      const idx = list.findIndex(r => r.id === id);
+      if (idx >= 0 && updated && updated[0]) {
+        list[idx] = dbToJs(updated[0], type);
+      }
+    } else {
+      // INSERT
+      const { data: inserted, error } = await sb.from(type).insert(dbRow).select();
+      if (error) throw error;
+      if (inserted && inserted[0]) {
+        getItems(type).push(dbToJs(inserted[0], type));
+      }
+    }
+    setSyncStatus('connected');
+    render();
+    closeModal();
+    toast(id ? 'Opdracht bijgewerkt' : 'Opdracht toegevoegd');
+  } catch (err) {
+    console.error('Save error:', err);
+    setSyncStatus('error');
+    toast('Fout bij opslaan: ' + (err.message || 'onbekende fout'), true);
   }
-  saveData();render();closeModal();
-  toast(id?'Opdracht bijgewerkt':'Opdracht toegevoegd');
 }
 
 // ---- Actions ----
-function editEntry(type,id){
-  const item=yearData()[type].find(r=>r.id===id);
-  if(item) openModal(type,item);
+function editEntry(type, id) {
+  const item = getItems(type).find(r => r.id === id);
+  if (item) openModal(type, item);
 }
 
-function deleteEntry(type,id){
-  if(!confirm('Weet je zeker dat je deze opdracht wilt verwijderen?')) return;
-  yearData()[type]=yearData()[type].filter(r=>r.id!==id);
-  saveData();render();
-  toast('Opdracht verwijderd');
+async function deleteEntry(type, id) {
+  if (!confirm('Weet je zeker dat je deze opdracht wilt verwijderen?')) return;
+  try {
+    setSyncStatus('loading');
+    const { error } = await sb.from(type).delete().eq('id', id);
+    if (error) throw error;
+    if (type === 'werkelijk') {
+      werkelijkData = werkelijkData.filter(r => r.id !== id);
+    } else {
+      forecastData = forecastData.filter(r => r.id !== id);
+    }
+    setSyncStatus('connected');
+    render();
+    toast('Opdracht verwijderd');
+  } catch (err) {
+    console.error('Delete error:', err);
+    setSyncStatus('error');
+    toast('Fout bij verwijderen: ' + (err.message || 'onbekende fout'), true);
+  }
 }
 
-function convertToWerkelijk(id){
-  const fc=yearData().forecast;
-  const idx=fc.findIndex(r=>r.id===id);
-  if(idx<0) return;
-  const item={...fc[idx]};
-  delete item.chance;
-  item.id=uid();
-  yearData().werkelijk.push(item);
-  fc.splice(idx,1);
-  saveData();render();
-  toast('Forecast omgezet naar werkelijke opdracht');
+async function convertToWerkelijk(id) {
+  const fcItem = forecastData.find(r => r.id === id);
+  if (!fcItem) return;
+
+  try {
+    setSyncStatus('loading');
+    // Insert into werkelijk (without chance/forecast fields)
+    const werkelijkRow = {
+      jaar: currentYear,
+      projectnummer: fcItem.project,
+      opdrachtgever: fcItem.client,
+      hoeveelheid: fcItem.quantity,
+      eenheid: fcItem.unit,
+      tarief: fcItem.rate,
+      marge: fcItem.margin,
+      maand: fcItem.month,
+    };
+
+    const { data: inserted, error: insErr } = await sb.from('werkelijk').insert(werkelijkRow).select();
+    if (insErr) throw insErr;
+
+    // Delete from forecast
+    const { error: delErr } = await sb.from('forecast').delete().eq('id', id);
+    if (delErr) throw delErr;
+
+    // Update local data
+    if (inserted && inserted[0]) {
+      werkelijkData.push(dbToJs(inserted[0], 'werkelijk'));
+    }
+    forecastData = forecastData.filter(r => r.id !== id);
+
+    setSyncStatus('connected');
+    render();
+    toast('Forecast omgezet naar werkelijke opdracht');
+  } catch (err) {
+    console.error('Convert error:', err);
+    setSyncStatus('error');
+    toast('Fout bij omzetten: ' + (err.message || 'onbekende fout'), true);
+  }
 }
 
 // ---- Export CSV ----
-function exportCSV(type){
-  const items=yearData()[type];
-  if(!items.length){toast('Geen data om te exporteren');return}
-  const isForecast=type==='forecast';
-  let headers=['Projectnummer','Opdrachtgever','Hoeveelheid','Eenheid','Tarief','Omzet','Marge','Maand'];
-  if(isForecast) headers.push('Kans (%)','Gewogen Omzet','Gewogen Marge');
+function exportCSV(type) {
+  const items = getItems(type);
+  if (!items.length) { toast('Geen data om te exporteren'); return; }
+  const isForecast = type === 'forecast';
+  let headers = ['Projectnummer', 'Opdrachtgever', 'Hoeveelheid', 'Eenheid', 'Tarief', 'Omzet', 'Marge', 'Maand'];
+  if (isForecast) headers.push('Kans (%)', 'Gewogen Omzet', 'Gewogen Marge');
 
-  const rows=items.map(r=>{
-    const omzet=r.quantity*r.rate;
-    let row=[r.project,r.client,r.quantity,r.unit,r.rate,omzet.toFixed(2),r.margin,r.month];
-    if(isForecast){
-      row.push(r.chance,(omzet*r.chance/100).toFixed(2),(r.margin*r.chance/100).toFixed(2));
+  const rows = items.map(r => {
+    const omzet = r.omzet || (r.quantity * r.rate);
+    let row = [r.project, r.client, r.quantity, r.unit, r.rate, omzet.toFixed(2), r.margin, r.month];
+    if (isForecast) {
+      const go = r.gewogen_omzet || (omzet * r.chance / 100);
+      const gm = r.gewogen_marge || (r.margin * r.chance / 100);
+      row.push(r.chance, go.toFixed(2), gm.toFixed(2));
     }
-    return row.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(';');
+    return row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';');
   });
 
-  const csv='\uFEFF'+[headers.join(';'),...rows].join('\n');
-  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob);
-  a.download=`${type}_${currentYear}.csv`;
+  const csv = '\uFEFF' + [headers.join(';'), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${type}_${currentYear}.csv`;
   a.click();
   toast(`CSV ${type} geëxporteerd`);
 }
 
 // ---- Toast ----
-function toast(msg){
-  const t=document.getElementById('toast');
-  t.textContent=msg;t.classList.add('show');
-  setTimeout(()=>t.classList.remove('show'),2500);
+function toast(msg, isError = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => { t.className = 'toast'; }, 3500);
 }
 
-function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 // ---- Year Selector ----
-function initYearSelector(){
-  const sel=document.getElementById('yearSelect');
-  for(let y=2024;y<=2030;y++){
-    const o=document.createElement('option');
-    o.value=y;o.textContent=y;
-    if(y===currentYear) o.selected=true;
+function initYearSelector() {
+  const sel = document.getElementById('yearSelect');
+  for (let y = 2024; y <= 2030; y++) {
+    const o = document.createElement('option');
+    o.value = y; o.textContent = y;
+    if (y === currentYear) o.selected = true;
     sel.appendChild(o);
   }
-  sel.addEventListener('change',()=>{
-    currentYear=parseInt(sel.value);
-    loadData();render();
+  sel.addEventListener('change', async () => {
+    currentYear = parseInt(sel.value);
+    await loadData();
+    render();
   });
 }
 
 // ---- Init ----
-initYearSelector();
-loadData();
-render();
+(async function init() {
+  initYearSelector();
+  await loadData();
+  render();
+})();
 </script>
 </body>
 </html>
