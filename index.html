@@ -155,7 +155,7 @@ th,td{padding:.35rem .3rem}
         </div>
       </div>
     </div>
-    <div id="userBadge" class="user-badge" onclick="changeUsername()" title="Klik om naam te wijzigen"></div>
+    <div id="userBadge" class="user-badge" onclick="signOut()" title="Uitloggen"></div>
     <select id="yearSelect" title="Jaar selecteren"></select>
     <button class="btn btn-ghost" onclick="exportCSV('werkelijk')">⬇ CSV Werkelijk</button>
     <button class="btn btn-ghost" onclick="exportCSV('forecast')">⬇ CSV Forecast</button>
@@ -281,30 +281,17 @@ th,td{padding:.35rem .3rem}
   </div>
 </div>
 
-<!-- Toegangscode Modal -->
-<div class="modal-overlay" id="accessModal">
-  <div class="modal" style="max-width:400px">
+<!-- Login Modal -->
+<div class="modal-overlay" id="loginModal">
+  <div class="modal" style="max-width:420px">
     <div class="auth-modal-body">
-      <h3>🔒 Toegangscode vereist</h3>
-      <p>Voer de toegangscode in om de app te gebruiken.</p>
-      <input type="password" id="accessCodeInput" placeholder="Toegangscode" onkeydown="if(event.key==='Enter')validateAccess()">
-      <div class="auth-error" id="accessError"></div>
+      <h3>🔐 Inloggen vereist</h3>
+      <p>Log in met je Groba-account om Omzet & Forecast te gebruiken.</p>
+      <input type="email" id="loginEmail" placeholder="E-mailadres" autocomplete="email" onkeydown="if(event.key==='Enter')document.getElementById('loginPassword').focus()">
+      <input type="password" id="loginPassword" placeholder="Wachtwoord" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()">
+      <div class="auth-error" id="loginError"></div>
       <br>
-      <button class="btn btn-primary" onclick="validateAccess()">Doorgaan</button>
-    </div>
-  </div>
-</div>
-
-<!-- Gebruikersnaam Modal -->
-<div class="modal-overlay" id="usernameModal">
-  <div class="modal" style="max-width:400px">
-    <div class="auth-modal-body">
-      <h3>👤 Wat is je naam?</h3>
-      <p>Je naam wordt getoond bij opdrachten die je toevoegt.</p>
-      <input type="text" id="usernameInput" placeholder="Bijv. Bouwe" maxlength="30" onkeydown="if(event.key==='Enter')saveUsername()">
-      <div class="auth-error" id="usernameError"></div>
-      <br>
-      <button class="btn btn-primary" onclick="saveUsername()">Opslaan</button>
+      <button class="btn btn-primary" onclick="login()">Inloggen</button>
     </div>
   </div>
 </div>
@@ -316,8 +303,8 @@ th,td{padding:.35rem .3rem}
 // =====================================================================
 // CONFIGURATIE — Pas deze waarden aan naar wens
 // =====================================================================
-const ACCESS_CODE = 'GROBA2026';                  // Toegangscode voor de app
-const ADMINS = ['Bouwe', 'Jeroen', 'Bas'];          // Admin-gebruikers (case-insensitive)
+const ALLOWED_EMAILS = ['b.groot@grobagroep.nl', 'j.wardenburg@grobagroep.nl', 'b.deboer@grobagroep.nl'];
+const ALLOWED_USERS = ['Bouwe', 'Jeroen', 'Bas'];    // Weergavenamen voor toegestane gebruikers
 // =====================================================================
 
 const MONTHS = ['januari','februari','maart','april','mei','juni','juli','augustus','september','oktober','november','december'];
@@ -338,89 +325,85 @@ let presenceUsers = {};  // { presenceRef: { user, role } }
 let presenceToastQueue = [];
 let presenceToastActive = false;
 
-// ---- Gebruiker & Rollen ----
+// ---- Gebruiker, rollen & Supabase Auth ----
+function displayNameFromUser(user) {
+  const metaName = user?.user_metadata?.name || user?.user_metadata?.full_name;
+  if (metaName) return metaName;
+  const email = (user?.email || '').toLowerCase();
+  if (email.startsWith('bouwe')) return 'Bouwe';
+  if (email.startsWith('jeroen')) return 'Jeroen';
+  if (email.startsWith('bas')) return 'Bas';
+  return email.split('@')[0] || 'Gebruiker';
+}
+
 function isAdmin() {
-  return ADMINS.some(a => a.toLowerCase() === currentUser.toLowerCase());
+  // Alleen ingelogde accounts krijgen toegang; Bouwe/Jeroen/Bas mogen alle drie wijzigen.
+  return !!currentUser;
 }
 
 function getRoleBadge() {
-  return isAdmin() ? '👑 Admin' : '👤 Gebruiker';
+  return isAdmin() ? '✏️ Bewerken' : '👤 Gebruiker';
 }
 
 function updateUserBadge() {
   const el = document.getElementById('userBadge');
-  el.innerHTML = `<span class="role-icon">${isAdmin() ? '👑' : '👤'}</span> ${esc(currentUser)} <span style="font-size:.65rem;opacity:.7">${isAdmin() ? 'Admin' : 'Gebruiker'}</span>`;
+  el.innerHTML = `<span class="role-icon">👤</span> ${esc(currentUser)} <span style="font-size:.65rem;opacity:.7">ingelogd</span>`;
 }
 
-// ---- Toegangscontrole ----
-function checkAccess() {
-  return new Promise((resolve) => {
-    if (localStorage.getItem('omzet_access_ok') === 'true') {
-      resolve();
-      return;
-    }
-    const modal = document.getElementById('accessModal');
-    modal.classList.add('active');
-    document.getElementById('accessCodeInput').focus();
-    // resolve wordt aangeroepen door validateAccess()
-    window._accessResolve = resolve;
-  });
-}
-
-function validateAccess() {
-  const input = document.getElementById('accessCodeInput').value.trim();
-  if (input === ACCESS_CODE) {
-    localStorage.setItem('omzet_access_ok', 'true');
-    document.getElementById('accessModal').classList.remove('active');
-    document.getElementById('accessError').textContent = '';
-    if (window._accessResolve) window._accessResolve();
-  } else {
-    document.getElementById('accessError').textContent = '❌ Onjuiste toegangscode';
-    document.getElementById('accessCodeInput').value = '';
-    document.getElementById('accessCodeInput').focus();
-  }
-}
-
-// ---- Gebruikersnaam ----
-function checkUsername() {
-  return new Promise((resolve) => {
-    const stored = localStorage.getItem('omzet_username');
-    if (stored) {
-      currentUser = stored;
+async function requireLogin() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (session?.user) {
+    const email = (session.user.email || '').toLowerCase();
+    if (!ALLOWED_EMAILS.includes(email)) {
+      await sb.auth.signOut();
+    } else {
+      currentUser = displayNameFromUser(session.user);
       updateUserBadge();
-      resolve();
       return;
     }
-    const modal = document.getElementById('usernameModal');
-    modal.classList.add('active');
-    document.getElementById('usernameInput').focus();
-    window._usernameResolve = resolve;
-  });
+  }
+  const modal = document.getElementById('loginModal');
+  modal.classList.add('active');
+  setTimeout(() => document.getElementById('loginEmail').focus(), 50);
+  return new Promise((resolve) => { window._loginResolve = resolve; });
 }
 
-function saveUsername() {
-  const input = document.getElementById('usernameInput').value.trim();
-  if (!input) {
-    document.getElementById('usernameError').textContent = '❌ Voer een naam in';
+async function login() {
+  const email = document.getElementById('loginEmail').value.trim().toLowerCase();
+  const password = document.getElementById('loginPassword').value;
+  const errorEl = document.getElementById('loginError');
+  errorEl.textContent = '';
+  if (!email || !password) {
+    errorEl.textContent = 'Vul e-mailadres en wachtwoord in';
     return;
   }
-  localStorage.setItem('omzet_username', input);
-  currentUser = input;
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) {
+    errorEl.textContent = 'Inloggen mislukt: ' + error.message;
+    return;
+  }
+  const loginEmailNorm = (data.user?.email || '').toLowerCase();
+  if (!ALLOWED_EMAILS.includes(loginEmailNorm)) {
+    await sb.auth.signOut();
+    errorEl.textContent = 'Dit account heeft geen toegang tot deze app';
+    return;
+  }
+  currentUser = displayNameFromUser(data.user);
   updateUserBadge();
-  document.getElementById('usernameModal').classList.remove('active');
-  document.getElementById('usernameError').textContent = '';
-  if (window._usernameResolve) window._usernameResolve();
+  document.getElementById('loginModal').classList.remove('active');
+  document.getElementById('loginPassword').value = '';
+  if (window._loginResolve) window._loginResolve();
 }
 
-function changeUsername() {
-  const newName = prompt('Wijzig je naam:', currentUser);
-  if (newName && newName.trim()) {
-    currentUser = newName.trim();
-    localStorage.setItem('omzet_username', currentUser);
-    updateUserBadge();
-    toast('Naam gewijzigd naar ' + currentUser);
-  }
+async function signOut() {
+  if (!confirm('Uitloggen?')) return;
+  if (presenceChannel) await presenceChannel.untrack();
+  await sb.auth.signOut();
+  location.reload();
 }
+
+// Backwards compatible no-op; oude versies hadden een wijzig-naam knop.
+function changeUsername() { signOut(); }
 
 // ---- Sync Indicator ----
 function setSyncStatus(status) {
@@ -1147,40 +1130,21 @@ function showNextPresenceToast() {
   }, 2500);
 }
 
-// Update presence when username changes
-const _origChangeUsername = changeUsername;
-changeUsername = function() {
-  const oldName = currentUser;
-  _origChangeUsername();
-  if (currentUser !== oldName && presenceChannel) {
-    presenceChannel.untrack().then(() => {
-      presenceChannel.track({
-        user: currentUser,
-        role: isAdmin() ? 'admin' : 'gebruiker',
-        online_at: new Date().toISOString()
-      });
-    });
-  }
-};
-
 // ---- Init ----
 (async function init() {
   initYearSelector();
 
-  // Stap 1: Toegangscode controleren
-  await checkAccess();
+  // Stap 1: Inloggen via Supabase Auth
+  await requireLogin();
 
-  // Stap 2: Gebruikersnaam ophalen/vragen
-  await checkUsername();
-
-  // Stap 3: Data laden en renderen
+  // Stap 2: Data laden en renderen
   await loadData();
   render();
 
-  // Stap 4: Realtime subscriptions starten
+  // Stap 3: Realtime subscriptions starten
   setupRealtime();
 
-  // Stap 5: Presence tracking starten
+  // Stap 4: Presence tracking starten
   setupPresence();
 })();
 </script>
