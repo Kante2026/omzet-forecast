@@ -1,0 +1,18 @@
+const assert = require('node:assert/strict');
+const P = require('../planning.js');
+const split = P.distribute(100, -10, '2026-12', '2027-02');
+assert.equal(split.reduce((s,p)=>s+P.cents(p.omzet),0),10000);
+assert.equal(split.reduce((s,p)=>s+P.cents(p.margin),0),-1000);
+assert.deepEqual(split.map(p=>[p.year,p.month]),[[2026,'december'],[2027,'januari'],[2027,'februari']]);
+P.validate(split,100,-10);
+assert.throws(()=>P.distribute(1,1,'2027-02','2027-01'));
+assert.throws(()=>P.validate([...split,split[0]],100,-10));
+assert.throws(()=>P.validate(split,101,-10));
+const row={year:2026, month:'december', quantity:10,rate:10,omzet:100,margin:-10,allocations:split,completed:true};
+assert.equal(P.projectYear(row,2027).omzet,66.67);
+assert.equal(P.projectYear(row,2028),null);
+assert.equal(P.totals([row],[],2027,true)[0].wo,66.67);
+assert.equal(P.totals([], [{...row,chance:0}],2027,true)[0].fo,0);
+assert.equal(P.totals([], [{...row,chance:50}],2027,true)[0].fo,33.335);
+assert.equal(P.projectYear({year:2027,month:'januari',quantity:2,rate:5,omzet:0,margin:0},2027).omzet,0);
+console.log('Planning tests passed: rounding, negative margins, year boundaries, completed revenue, zero probability, validation.');

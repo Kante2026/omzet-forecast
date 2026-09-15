@@ -170,13 +170,13 @@ th,td{padding:.35rem .3rem}
   <!-- Dashboard -->
   <div class="dashboard">
     <div class="card">
-      <div class="card-header"><h2>📈 Maandoverzicht</h2></div>
+      <div class="card-header"><h2 id="chartHeading">📈 Maandoverzicht</h2><select id="periodView" aria-label="Overzicht per maand of kwartaal" onchange="render()"><option value="month">Maand</option><option value="quarter">Kwartaal</option></select></div>
       <div class="card-body">
         <div class="chart-container"><canvas id="monthlyChart"></canvas></div>
       </div>
     </div>
     <div class="card">
-      <div class="card-header"><h2>📋 Samenvatting per maand</h2></div>
+      <div class="card-header"><h2 id="summaryHeading">📋 Samenvatting per maand</h2></div>
       <div class="card-body"><div id="summaryGrid" class="summary-grid"></div></div>
     </div>
   </div>
@@ -185,13 +185,15 @@ th,td{padding:.35rem .3rem}
   <div class="card" style="margin-bottom:1.5rem">
     <div class="card-header">
       <h2>✅ Werkelijke Opdrachten</h2>
-      <button class="btn btn-primary" onclick="openModal('werkelijk')">+ Toevoegen</button>
+      <div class="table-tools"><input id="werkelijkSearch" type="search" placeholder="Zoek project/opdrachtgever..." oninput="render()">
+      <select id="werkelijkFilter" aria-label="Projectstatus" onchange="render()"><option value="active">Lopend</option><option value="completed">Afgerond</option><option value="all" selected>Alles</option></select>
+      <button class="btn btn-primary" onclick="openModal('werkelijk')">+ Toevoegen</button></div>
     </div>
     <div class="table-wrap">
       <table id="werkelijkTable">
         <thead><tr>
           <th>Project</th><th>Opdrachtgever</th><th class="num">Hoeveelheid</th><th>Eenheid</th>
-          <th class="money">Tarief</th><th class="money">Omzet</th><th class="money">Marge</th><th>Maand</th><th>Ingevoerd door</th><th>Acties</th>
+          <th class="money">Tarief</th><th class="money">Omzet</th><th class="money">Marge</th><th>Periode</th><th>Ingevoerd door</th><th>Acties</th>
         </tr></thead>
         <tbody id="werkelijkBody"></tbody>
         <tfoot id="werkelijkFoot"></tfoot>
@@ -219,7 +221,7 @@ th,td{padding:.35rem .3rem}
       <table id="forecastTable">
         <thead><tr>
           <th>Project</th><th>Opdrachtgever</th><th class="num">Hoeveelheid</th><th>Eenheid</th>
-          <th class="money">Tarief</th><th class="money">Omzet</th><th class="money">Marge</th><th>Maand</th><th>Ingevoerd door</th>
+          <th class="money">Tarief</th><th class="money">Omzet</th><th class="money">Marge</th><th>Periode</th><th>Ingevoerd door</th>
           <th>Kans</th><th class="money">Gew. Omzet</th><th class="money">Gew. Marge</th><th>Acties</th>
         </tr></thead>
         <tbody id="forecastBody"></tbody>
@@ -281,9 +283,21 @@ th,td{padding:.35rem .3rem}
               <option value="november">november</option><option value="december">december</option>
             </select>
           </div>
+          <div class="form-group"><label for="fYear">Jaar</label><input id="fYear" type="number" min="2024" max="2100" required></div>
           <div class="form-group" id="kansGroup" style="display:none">
             <label>Kans (%)</label>
             <input type="number" id="fChance" min="0" max="100" value="50">
+          </div>
+        </div>
+        <div style="margin-top:1rem">
+          <button type="button" class="btn btn-outline" onclick="showDistribution()">Verdeel omzet en marge over maanden</button>
+          <div id="distributionPanel" hidden style="margin-top:1rem">
+            <p>De opdracht blijft één geheel. Omzet en marge worden per maand opgeteld, ook over jaargrenzen. Bedragen hieronder zijn ongewogen.</p>
+            <div class="form-grid"><div class="form-group"><label for="splitStart">Van maand</label><input type="month" id="splitStart" min="2024-01" max="2100-12"></div>
+            <div class="form-group"><label for="splitEnd">Tot en met maand</label><input type="month" id="splitEnd" min="2024-01" max="2100-12"></div></div>
+            <button type="button" class="btn btn-outline" onclick="distributeDraft()">Gelijk verdelen</button>
+            <button type="button" class="btn btn-outline" onclick="clearDistribution()">Terug naar één maand</button>
+            <div id="distributionRows"></div><p id="distributionTotal" role="status"></p>
           </div>
         </div>
         <div style="margin-top:1.25rem;display:flex;gap:.5rem;justify-content:flex-end">
@@ -313,6 +327,7 @@ th,td{padding:.35rem .3rem}
 <div class="presence-toast" id="presenceToast"></div>
 <div class="toast" id="toast"></div>
 
+<script src="planning.js"></script>
 <script>
 // =====================================================================
 // CONFIGURATIE — Pas deze waarden aan naar wens
@@ -330,7 +345,10 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let werkelijkData = [];
 let forecastData = [];
-let currentYear = 2026;
+let currentYear = new Date().getFullYear();
+let allocationsDraft = [];
+let saveBusy = false;
+let loadVersion = 0;
 let chart = null;
 let currentUser = '';
 let realtimeChannel = null;
@@ -438,18 +456,21 @@ function setSyncStatus(status) {
 function dbToJs(row, type) {
   const obj = {
     id: row.id,
+    year: Number(row.jaar),
+    completed: row.afgerond === true,
+    allocations: Array.isArray(row.verdeling) ? row.verdeling : [],
     project: row.projectnummer || '',
     client: row.opdrachtgever || '',
     quantity: Number(row.hoeveelheid) || 0,
     unit: row.eenheid || 'kuub',
     rate: Number(row.tarief) || 0,
-    omzet: Number(row.omzet) || 0,
+    omzet: row.omzet == null ? Number(row.hoeveelheid) * Number(row.tarief) : Number(row.omzet),
     margin: Number(row.marge) || 0,
     month: row.maand || '',
     gebruiker: row.gebruiker || '',
   };
   if (type === 'forecast') {
-    obj.chance = Number(row.kans) || 50;
+    obj.chance = row.kans == null ? 50 : Number(row.kans);
     obj.gewogen_omzet = Number(row.gewogen_omzet) || 0;
     obj.gewogen_marge = Number(row.gewogen_marge) || 0;
   }
@@ -458,7 +479,7 @@ function dbToJs(row, type) {
 
 function jsToDb(entry, type) {
   const obj = {
-    jaar: currentYear,
+    jaar: entry.year ?? currentYear,
     projectnummer: entry.project,
     opdrachtgever: entry.client,
     hoeveelheid: entry.quantity,
@@ -468,6 +489,8 @@ function jsToDb(entry, type) {
     maand: entry.month,
     gebruiker: currentUser,
   };
+  obj.verdeling = entry.allocations?.length ? entry.allocations : null;
+  if (type === 'werkelijk') obj.afgerond = entry.completed === true;
   if (type === 'forecast') {
     obj.kans = entry.chance;
   }
@@ -476,63 +499,32 @@ function jsToDb(entry, type) {
 
 // ---- Data Loading ----
 async function loadData() {
+  const version = ++loadVersion;
   setSyncStatus('loading');
   try {
-    const [wRes, fRes] = await Promise.all([
-      sb.from('werkelijk').select('*').eq('jaar', currentYear).order('created_at', { ascending: true }),
-      sb.from('forecast').select('*').eq('jaar', currentYear).order('created_at', { ascending: true }),
-    ]);
-
-    if (wRes.error) throw wRes.error;
-    if (fRes.error) throw fRes.error;
-
-    werkelijkData = wRes.data.map(r => dbToJs(r, 'werkelijk'));
-    forecastData = fRes.data.map(r => dbToJs(r, 'forecast'));
-
-    if (werkelijkData.length === 0 && forecastData.length === 0) {
-      const [allW, allF] = await Promise.all([
-        sb.from('werkelijk').select('id', { count: 'exact', head: true }),
-        sb.from('forecast').select('id', { count: 'exact', head: true }),
-      ]);
-      if ((allW.count || 0) === 0 && (allF.count || 0) === 0) {
-        await insertDefaultData();
-        const [wRes2, fRes2] = await Promise.all([
-          sb.from('werkelijk').select('*').eq('jaar', currentYear).order('created_at', { ascending: true }),
-          sb.from('forecast').select('*').eq('jaar', currentYear).order('created_at', { ascending: true }),
-        ]);
-        if (!wRes2.error) werkelijkData = wRes2.data.map(r => dbToJs(r, 'werkelijk'));
-        if (!fRes2.error) forecastData = fRes2.data.map(r => dbToJs(r, 'forecast'));
+    const readAll = async table => {
+      const rows = [];
+      for (let from = 0; ; from += 500) {
+        const {data, error} = await sb.from(table).select('*').order('created_at', {ascending:true}).order('id').range(from, from+499);
+        if (error) throw error;
+        rows.push(...data);
+        if (data.length < 500) return rows;
       }
-    }
-
+    };
+    const [w, f] = await Promise.all([readAll('werkelijk'), readAll('forecast')]);
+    if (version !== loadVersion) return;
+    werkelijkData = w.map(r => dbToJs(r, 'werkelijk'));
+    forecastData = f.map(r => dbToJs(r, 'forecast'));
+    refreshYearOptions();
     setSyncStatus('connected');
   } catch (err) {
-    console.error('Supabase load error:', err);
+    if (version !== loadVersion) return;
     setSyncStatus('error');
-    toast('Fout bij laden van data: ' + (err.message || 'onbekende fout'), true);
+    toast('Fout bij laden van data: ' + err.message, true);
   }
 }
 
-async function insertDefaultData() {
-  const defaultWerkelijk = [
-    { jaar: 2026, projectnummer: '2026130', opdrachtgever: 'Grondbank GMG', hoeveelheid: 3000, eenheid: 'ton', tarief: 8, marge: 7500, maand: 'april' },
-    { jaar: 2026, projectnummer: '2026033', opdrachtgever: 'Paape', hoeveelheid: 4000, eenheid: 'kuub', tarief: 7.5, marge: 8000, maand: 'april' },
-    { jaar: 2026, projectnummer: '2026112', opdrachtgever: 'De Wilde', hoeveelheid: 3000, eenheid: 'kuub', tarief: 7.5, marge: 9000, maand: 'april' },
-    { jaar: 2026, projectnummer: '2026053', opdrachtgever: 'Bofa', hoeveelheid: 6000, eenheid: 'kuub', tarief: 1.5, marge: 9000, maand: 'mei' },
-  ];
-  const defaultForecast = [
-    { jaar: 2026, projectnummer: '2026136', opdrachtgever: 'Bovisie', hoeveelheid: 18000, eenheid: 'kuub', tarief: 15, marge: 27000, maand: 'mei', kans: 50 },
-    { jaar: 2026, projectnummer: '2026140', opdrachtgever: 'Van Aalsburg', hoeveelheid: 3000, eenheid: 'kuub', tarief: 10, marge: 4500, maand: 'september', kans: 80 },
-    { jaar: 2026, projectnummer: '2025127', opdrachtgever: 'Floris', hoeveelheid: 1000, eenheid: 'ton', tarief: 115, marge: 50000, maand: 'mei', kans: 80 },
-  ];
-
-  const [wIns, fIns] = await Promise.all([
-    sb.from('werkelijk').insert(defaultWerkelijk),
-    sb.from('forecast').insert(defaultForecast),
-  ]);
-  if (wIns.error) console.error('Default werkelijk insert error:', wIns.error);
-  if (fIns.error) console.error('Default forecast insert error:', fIns.error);
-}
+function insertDefaultData() { throw new Error("Voorbeeldgegevens worden niet automatisch ingevoegd."); }
 
 // ---- Realtime Subscriptions ----
 function setupRealtime() {
@@ -562,10 +554,7 @@ async function handleRealtimeChange(table, payload) {
   const newRow = payload.new;
   const oldRow = payload.old;
 
-  // Controleer of de wijziging van het huidige jaar is
-  if (newRow && newRow.jaar && newRow.jaar !== currentYear) return;
-  if (oldRow && oldRow.jaar && oldRow.jaar !== currentYear) return;
-
+  // Also reload cross-year schedules when their original project year differs.
   // Controleer of de wijziging van de huidige gebruiker is (dan hoeven we niet te refreshen)
   const changeUser = (newRow && newRow.gebruiker) || '';
   const isSelf = changeUser.toLowerCase() === currentUser.toLowerCase();
@@ -619,14 +608,17 @@ function matchesTableFilter(row, type) {
   const searchEl = document.getElementById(type + 'Search');
   const filterEl = document.getElementById(type + 'Filter');
   const query = (searchEl?.value || '').trim().toLowerCase();
-  const filter = filterEl?.value || 'current';
+  const filter = filterEl?.value || 'all';
   const idx = monthIndex(row.month);
   const currentIdx = currentMonthIndex();
   const text = `${row.project || ''} ${row.client || ''} ${row.gebruiker || ''} ${row.month || ''}`.toLowerCase();
   if (query && !text.includes(query)) return false;
-  if (filter === 'current') return idx >= currentIdx;
-  if (filter === 'current-month') return idx === currentIdx;
-  if (filter === 'past') return idx < currentIdx;
+  if (filter === 'active') return !row.completed;
+  if (filter === 'completed') return row.completed;
+  const indices = (row.parts || [{month:row.month}]).map(p => monthIndex(p.month));
+  if (filter === 'current') return currentYear > new Date().getFullYear() || (currentYear === new Date().getFullYear() && indices.some(i => i >= currentIdx));
+  if (filter === 'current-month') return currentYear === new Date().getFullYear() && indices.includes(currentIdx);
+  if (filter === 'past') return currentYear < new Date().getFullYear() || (currentYear === new Date().getFullYear() && indices.every(i => i < currentIdx));
   return true;
 }
 
@@ -644,7 +636,7 @@ function updateFilterNote(type, total, visible) {
 }
 
 function renderTable(type) {
-  const allItems = getItems(type);
+  const allItems = getItems(type).map(r => Planning.projectYear(r, currentYear)).filter(Boolean);
   const items = allItems.filter(r => matchesTableFilter(r, type));
   const tbody = document.getElementById(type + 'Body');
   const tfoot = document.getElementById(type + 'Foot');
@@ -661,7 +653,7 @@ function renderTable(type) {
   let totOmzet = 0, totMarge = 0, totGewOmzet = 0, totGewMarge = 0;
 
   tbody.innerHTML = items.map(r => {
-    const omzet = r.omzet || (r.quantity * r.rate);
+    const omzet = r.omzet ?? (r.quantity * r.rate);
     totOmzet += omzet;
     totMarge += r.margin;
     let forecastCols = '';
@@ -682,22 +674,24 @@ function renderTable(type) {
     // Rechten: iedereen kan verwijderen, alleen admin kan bewerken/omzetten
     const convertBtn = (isForecast && admin) ? `<button class="btn btn-success btn-xs" onclick="convertToWerkelijk('${r.id}')" title="Omzetten naar werkelijk">✓ Omzetten</button>` : '';
     const revertBtn = (!isForecast && admin) ? `<button class="btn btn-outline btn-xs" onclick="convertToForecast('${r.id}')" title="Terugzetten naar forecast" style="border-color:#f59e0b;color:#d97706">↩ Terug</button>` : '';
+    const completedBtn = (!isForecast && admin) ? `<button class="btn btn-success btn-xs" onclick="toggleCompleted('${r.id}')">${r.completed ? 'Heropen project' : 'Project afgerond'}</button>` : '';
+    const spreadBtn = admin ? `<button class="btn btn-outline btn-xs" onclick="editDistribution('${type}','${r.id}')">Verdelen</button>` : '';
     const editBtn = admin ? `<button class="btn btn-outline btn-xs" onclick="editEntry('${type}','${r.id}')" title="Bewerken">✏️</button>` : '';
     const deleteBtn = `<button class="btn btn-danger btn-xs" onclick="deleteEntry('${type}','${r.id}')" title="Verwijderen">🗑</button>`;
 
     return `<tr>
-      <td><strong>${esc(r.project)}</strong></td>
+      <td><strong>${esc(r.project)}</strong>${r.completed ? '<div class="kans-badge kans-high">Afgerond</div>' : ''}</td>
       <td>${esc(r.client)}</td>
       <td class="num">${num(r.quantity)}</td>
       <td>${esc(r.unit)}</td>
       <td class="money">${eurFull(r.rate)}</td>
       <td class="money">${eur(omzet)}</td>
       <td class="money positive">${eur(r.margin)}</td>
-      <td>${esc(r.month)}</td>
+      <td>${r.parts.map(p => esc(p.month)).join(", ")} ${currentYear}${r.allocations.length ? '<div class="entry-user">Bedragen: dit jaar · hoeveelheid: hele opdracht</div>' : ''}</td>
       <td>${r.gebruiker ? esc(r.gebruiker) : '-'}</td>
       ${forecastCols}
       <td><div class="actions-cell">
-        ${convertBtn}${revertBtn}${editBtn}${deleteBtn}
+        ${completedBtn}${convertBtn}${revertBtn}${spreadBtn}${editBtn}${deleteBtn}
       </div></td>
     </tr>`;
   }).join('');
@@ -723,60 +717,23 @@ function renderTable(type) {
 }
 
 function renderSummary() {
-  const grid = document.getElementById('summaryGrid');
-  const monthMap = {};
-  MONTHS.forEach(m => monthMap[m] = { wo: 0, wm: 0, fo: 0, fm: 0 });
-
-  werkelijkData.forEach(r => {
-    if (monthMap[r.month] !== undefined) {
-      monthMap[r.month].wo += r.omzet || (r.quantity * r.rate);
-      monthMap[r.month].wm += r.margin;
-    }
-  });
-  forecastData.forEach(r => {
-    if (monthMap[r.month] !== undefined) {
-      monthMap[r.month].fo += r.gewogen_omzet || (r.quantity * r.rate * (r.chance / 100));
-      monthMap[r.month].fm += r.gewogen_marge || (r.margin * (r.chance / 100));
-    }
-  });
-
-  const active = MONTHS.filter(m => { const d = monthMap[m]; return d.wo || d.wm || d.fo || d.fm; });
-  if (!active.length) {
-    grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1">Geen data voor dit jaar.</div>';
-    return;
-  }
-
-  grid.innerHTML = active.map(m => {
-    const d = monthMap[m];
-    return `<div class="summary-item">
-      <div class="label">${m}</div>
-      <div class="value">${eur(d.wo)}</div>
-      <div style="font-size:.65rem;color:var(--gray-500)">Werkelijk omzet</div>
-      <div class="value green" style="font-size:.85rem;margin-top:.25rem">${eur(d.wm)}</div>
-      <div style="font-size:.65rem;color:var(--gray-500)">Werkelijk marge</div>
-      ${d.fo ? `<div style="margin-top:.35rem;border-top:1px dashed var(--gray-300);padding-top:.35rem">
-        <div class="value" style="font-size:.85rem;color:var(--blue-500)">${eur(d.fo)}</div>
-        <div style="font-size:.65rem;color:var(--gray-500)">Forecast omzet</div>
-        <div class="value green" style="font-size:.8rem">${eur(d.fm)}</div>
-        <div style="font-size:.65rem;color:var(--gray-500)">Forecast marge</div>
-      </div>` : ''}
-    </div>`;
-  }).join('');
+  const quarterly = document.getElementById('periodView').value === 'quarter';
+  document.getElementById('summaryHeading').textContent = 'Samenvatting per ' + (quarterly ? 'kwartaal' : 'maand') + ' · ' + currentYear;
+  const data = Planning.totals(werkelijkData, forecastData, currentYear, quarterly);
+  document.getElementById('summaryGrid').innerHTML = data.map(d => `<div class="summary-item"><div class="label">${d.label}</div>
+    <div class="value">${eur(d.wo)}</div><small>Werkelijk omzet</small>
+    <div class="value green">${eur(d.wm)}</div><small>Werkelijk marge</small>
+    <div class="value">${eur(d.fo)}</div><small>Forecast omzet (gewogen)</small>
+    <div class="value green">${eur(d.fm)}</div><small>Forecast marge (gewogen)</small></div>`).join('');
 }
 
 function renderChart() {
-  const labels = [];
-  const wOmzet = [], wMarge = [], fOmzet = [], fMarge = [];
-
-  MONTHS.forEach(m => {
-    let wo = 0, wm = 0, fo = 0, fm = 0;
-    werkelijkData.forEach(r => { if (r.month === m) { wo += r.omzet || (r.quantity * r.rate); wm += r.margin; } });
-    forecastData.forEach(r => { if (r.month === m) { fo += r.gewogen_omzet || (r.quantity * r.rate * (r.chance / 100)); fm += r.gewogen_marge || (r.margin * (r.chance / 100)); } });
-    if (wo || wm || fo || fm) {
-      labels.push(m.charAt(0).toUpperCase() + m.slice(1, 3));
-      wOmzet.push(wo); wMarge.push(wm); fOmzet.push(fo); fMarge.push(fm);
-    }
-  });
+  const quarterly = document.getElementById('periodView').value === 'quarter';
+  document.getElementById('chartHeading').textContent = (quarterly ? 'Kwartaaloverzicht' : 'Maandoverzicht') + ' · ' + currentYear;
+  const periods = Planning.totals(werkelijkData, forecastData, currentYear, quarterly);
+  const labels = periods.map(p => p.label);
+  const wOmzet = periods.map(p => p.wo), wMarge = periods.map(p => p.wm);
+  const fOmzet = periods.map(p => p.fo), fMarge = periods.map(p => p.fm);
 
   if (chart) chart.destroy();
   const ctx = document.getElementById('monthlyChart').getContext('2d');
@@ -827,12 +784,17 @@ function openModal(type, item = null) {
     document.getElementById('fRate').value = item.rate;
     document.getElementById('fMargin').value = item.margin;
     document.getElementById('fMonth').value = item.month;
-    if (type === 'forecast') document.getElementById('fChance').value = item.chance || 50;
+    if (type === 'forecast') document.getElementById('fChance').value = item.chance ?? 50;
   } else {
     document.getElementById('entryForm').reset();
     document.getElementById('entryId').value = '';
     if (type === 'forecast') document.getElementById('fChance').value = 50;
   }
+  document.getElementById('entryType').value = type;
+  document.getElementById('fYear').value = item?.year ?? currentYear;
+  allocationsDraft = structuredClone(item?.allocations || []);
+  document.getElementById('distributionPanel').hidden = !allocationsDraft.length;
+  renderDistribution();
   document.getElementById('modalOverlay').classList.add('active');
   document.getElementById('fProject').focus();
 }
@@ -841,54 +803,52 @@ function closeModal() { document.getElementById('modalOverlay').classList.remove
 
 async function saveEntry(e) {
   e.preventDefault();
+  if (saveBusy) return;
   const type = document.getElementById('entryType').value;
   const id = document.getElementById('entryId').value;
-
-  // Dubbelcheck: alleen admins mogen bewerken
-  if (id && !isAdmin()) {
-    toast('Alleen admins mogen opdrachten bewerken', true);
-    closeModal();
-    return;
-  }
-
+  if (id && !isAdmin()) return toast('Alleen admins mogen opdrachten bewerken', true);
+  const original = getItems(type).find(r => r.id === id);
   const entry = {
     project: document.getElementById('fProject').value.trim(),
     client: document.getElementById('fClient').value.trim(),
-    quantity: parseFloat(document.getElementById('fQuantity').value) || 0,
-    unit: document.getElementById('fUnit').value,
-    rate: parseFloat(document.getElementById('fRate').value) || 0,
-    margin: parseFloat(document.getElementById('fMargin').value) || 0,
+    year: Number(document.getElementById('fYear').value),
     month: document.getElementById('fMonth').value,
+    quantity: Number(document.getElementById('fQuantity').value),
+    unit: document.getElementById('fUnit').value,
+    rate: Number(document.getElementById('fRate').value),
+    margin: Number(document.getElementById('fMargin').value),
+    chance: Number(document.getElementById('fChance').value),
+    completed: original?.completed || false,
+    allocations: structuredClone(allocationsDraft)
   };
-  if (type === 'forecast') entry.chance = parseInt(document.getElementById('fChance').value) || 50;
-
-  const dbRow = jsToDb(entry, type);
-
   try {
-    setSyncStatus('loading');
-    if (id) {
-      const { data: updated, error } = await sb.from(type).update(dbRow).eq('id', id).select();
-      if (error) throw error;
-      const list = getItems(type);
-      const idx = list.findIndex(r => r.id === id);
-      if (idx >= 0 && updated && updated[0]) {
-        list[idx] = dbToJs(updated[0], type);
-      }
-    } else {
-      const { data: inserted, error } = await sb.from(type).insert(dbRow).select();
-      if (error) throw error;
-      if (inserted && inserted[0]) {
-        getItems(type).push(dbToJs(inserted[0], type));
-      }
+    if (!entry.project || !entry.client || !Number.isInteger(entry.year) || entry.year < 2024 || entry.year > 2100 || ![entry.quantity,entry.rate,entry.margin,entry.chance].every(Number.isFinite) || entry.chance < 0 || entry.chance > 100) throw Error('Controleer de ingevulde gegevens.');
+    if (entry.allocations.length) {
+      Planning.validate(entry.allocations, entry.quantity * entry.rate, entry.margin);
+      entry.year = entry.allocations[0].year;
+      entry.month = entry.allocations[0].month;
     }
-    setSyncStatus('connected');
-    render();
-    closeModal();
+    saveBusy = true;
+    document.querySelector('#entryForm button[type=submit]').disabled = true;
+    setSyncStatus('loading');
+    const dbRow = jsToDb(entry, type);
+    const {data, error} = id ? await sb.from(type).update(dbRow).eq('id',id).select() : await sb.from(type).insert(dbRow).select();
+    if (error) throw error;
+    if (!data?.length) throw Error('Geen opdracht opgeslagen. Controleer je toegang.');
+    const row = dbToJs(data[0], type), list = getItems(type), index = list.findIndex(r => r.id === row.id);
+    if (index < 0) list.push(row); else list[index] = row;
+    currentYear = entry.year;
+    refreshYearOptions();
+    if (type === 'werkelijk') document.getElementById('werkelijkFilter').value = 'all';
+    else document.getElementById('forecastFilter').value = 'all';
+    document.getElementById(type+'Search').value = '';
+    setSyncStatus('connected'); render(); closeModal();
     toast(id ? 'Opdracht bijgewerkt' : 'Opdracht toegevoegd');
   } catch (err) {
-    console.error('Save error:', err);
-    setSyncStatus('error');
-    toast('Fout bij opslaan: ' + (err.message || 'onbekende fout'), true);
+    setSyncStatus('error'); toast('Niet opgeslagen: '+err.message, true);
+  } finally {
+    saveBusy = false;
+    document.querySelector('#entryForm button[type=submit]').disabled = false;
   }
 }
 
@@ -933,17 +893,7 @@ async function convertToWerkelijk(id) {
 
   try {
     setSyncStatus('loading');
-    const werkelijkRow = {
-      jaar: currentYear,
-      projectnummer: fcItem.project,
-      opdrachtgever: fcItem.client,
-      hoeveelheid: fcItem.quantity,
-      eenheid: fcItem.unit,
-      tarief: fcItem.rate,
-      marge: fcItem.margin,
-      maand: fcItem.month,
-      gebruiker: currentUser,
-    };
+    const werkelijkRow = jsToDb({...fcItem, completed:false}, 'werkelijk');
 
     const { data: inserted, error: insErr } = await sb.from('werkelijk').insert(werkelijkRow).select();
     if (insErr) throw insErr;
@@ -978,18 +928,7 @@ async function convertToForecast(id) {
 
   try {
     setSyncStatus('loading');
-    const forecastRow = {
-      jaar: currentYear,
-      projectnummer: wItem.project,
-      opdrachtgever: wItem.client,
-      hoeveelheid: wItem.quantity,
-      eenheid: wItem.unit,
-      tarief: wItem.rate,
-      marge: wItem.margin,
-      maand: wItem.month,
-      kans: 50,
-      gebruiker: currentUser,
-    };
+    const forecastRow = jsToDb({...wItem, chance:50}, 'forecast');
 
     const { data: inserted, error: insErr } = await sb.from('forecast').insert(forecastRow).select();
     if (insErr) throw insErr;
@@ -1014,15 +953,15 @@ async function convertToForecast(id) {
 
 // ---- Export CSV ----
 function exportCSV(type) {
-  const items = getItems(type);
+  const items = getItems(type).map(r => Planning.projectYear(r, currentYear)).filter(Boolean);
   if (!items.length) { toast('Geen data om te exporteren'); return; }
   const isForecast = type === 'forecast';
-  let headers = ['Projectnummer', 'Opdrachtgever', 'Hoeveelheid', 'Eenheid', 'Tarief', 'Omzet', 'Marge', 'Maand', 'Gebruiker'];
+  let headers = ['Projectnummer', 'Opdrachtgever', 'Hoeveelheid hele opdracht', 'Eenheid', 'Tarief', 'Omzet in geselecteerd jaar', 'Marge in geselecteerd jaar', 'Maanden', 'Jaar', 'Status', 'Gebruiker'];
   if (isForecast) headers.push('Kans (%)', 'Gewogen Omzet', 'Gewogen Marge');
 
   const rows = items.map(r => {
-    const omzet = r.omzet || (r.quantity * r.rate);
-    let row = [r.project, r.client, r.quantity, r.unit, r.rate, omzet.toFixed(2), r.margin, r.month, r.gebruiker || ''];
+    const omzet = r.omzet ?? (r.quantity * r.rate);
+    let row = [r.project, r.client, r.quantity, r.unit, r.rate, omzet.toFixed(2), r.margin.toFixed(2), r.parts.map(p=>p.month).join(', '), currentYear, isForecast ? 'Forecast' : r.completed ? 'Afgerond' : 'Lopend', r.gebruiker || ''];
     if (isForecast) {
       const go = r.gewogen_omzet || (omzet * r.chance / 100);
       const gm = r.gewogen_marge || (r.margin * r.chance / 100);
@@ -1052,18 +991,62 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s; re
 
 // ---- Year Selector ----
 function initYearSelector() {
-  const sel = document.getElementById('yearSelect');
-  for (let y = 2024; y <= 2030; y++) {
-    const o = document.createElement('option');
-    o.value = y; o.textContent = y;
-    if (y === currentYear) o.selected = true;
-    sel.appendChild(o);
-  }
-  sel.addEventListener('change', async () => {
-    currentYear = parseInt(sel.value);
-    await loadData();
-    render();
+  refreshYearOptions();
+  document.getElementById('yearSelect').addEventListener('change', () => {
+    currentYear = Number(document.getElementById('yearSelect').value); render();
   });
+}
+
+
+function refreshYearOptions() {
+  const years = new Set(Array.from({length: Math.max(new Date().getFullYear()+6, currentYear+1)-2024}, (_,i) => 2024+i));
+  for (const row of [...werkelijkData, ...forecastData]) for (const p of Planning.slices(row)) years.add(p.year);
+  document.getElementById('yearSelect').innerHTML = [...years].sort((a,b)=>a-b).map(y => `<option value="${y}" ${y===currentYear?'selected':''}>${y}</option>`).join('');
+}
+async function toggleCompleted(id) {
+  if (!isAdmin() || saveBusy) return;
+  const row = werkelijkData.find(r => r.id === id);
+  if (!row) return;
+  saveBusy = true;
+  try {
+    const {data,error} = await sb.from('werkelijk').update({afgerond:!row.completed, gebruiker:currentUser}).eq('id',id).select();
+    if (error) throw error;
+    if (!data?.length) throw Error('Geen wijziging opgeslagen.');
+    const index = werkelijkData.findIndex(r => r.id === id);
+    if (index >= 0) werkelijkData[index] = dbToJs(data[0], 'werkelijk');
+    render(); toast(data[0].afgerond ? 'Project afgerond; omzet en marge blijven meetellen.' : 'Project heropend');
+  } catch(err) { toast('Niet opgeslagen: '+err.message,true); }
+  finally {saveBusy=false;}
+}
+function editDistribution(type,id) {
+  editEntry(type,id);
+  if (isAdmin()) showDistribution();
+}
+function showDistribution() {
+  document.getElementById('distributionPanel').hidden = false;
+  const month = Math.max(0, MONTHS.indexOf(document.getElementById('fMonth').value));
+  const year = Number(document.getElementById('fYear').value);
+  const first = allocationsDraft[0], last = allocationsDraft.at(-1);
+  const value = p => `${p.year}-${String(MONTHS.indexOf(p.month)+1).padStart(2,'0')}`;
+  document.getElementById('splitStart').value = first ? value(first) : `${year}-${String(month+1).padStart(2,'0')}`;
+  document.getElementById('splitEnd').value = last ? value(last) : document.getElementById('splitStart').value;
+}
+function distributeDraft() {
+  try {
+    allocationsDraft = Planning.distribute(Number(document.getElementById('fQuantity').value)*Number(document.getElementById('fRate').value), Number(document.getElementById('fMargin').value), document.getElementById('splitStart').value, document.getElementById('splitEnd').value);
+    renderDistribution();
+  } catch(err) {toast(err.message,true);}
+}
+function clearDistribution() {
+  allocationsDraft=[]; renderDistribution(); document.getElementById('distributionPanel').hidden=true;
+}
+function renderDistribution() {
+  document.getElementById('distributionRows').innerHTML = allocationsDraft.map((p,i) => `<div class="form-grid" style="margin-top:.5rem"><strong>${esc(p.month)} ${p.year}</strong><div class="form-group"><label for="allocationRevenue${i}">Omzet (€)</label><input id="allocationRevenue${i}" type="number" step="0.01" required value="${p.omzet}" oninput="allocationsDraft[${i}].omzet=this.value===''?NaN:Number(this.value); updateDistributionTotal()"></div><div class="form-group"><label for="allocationMargin${i}">Marge (€)</label><input id="allocationMargin${i}" type="number" step="0.01" required value="${p.margin}" oninput="allocationsDraft[${i}].margin=this.value===''?NaN:Number(this.value); updateDistributionTotal()"></div></div>`).join('');
+  updateDistributionTotal();
+}
+function updateDistributionTotal() {
+  const omzet = allocationsDraft.reduce((s,p)=>s+p.omzet,0), margin=allocationsDraft.reduce((s,p)=>s+p.margin,0);
+  document.getElementById('distributionTotal').textContent = allocationsDraft.length ? `Verdeeld: omzet ${eurFull(omzet)} · marge ${eurFull(margin)}. De som moet overeenkomen met de opdracht.` : '';
 }
 
 // ---- Presence (Online Gebruikers) ----
