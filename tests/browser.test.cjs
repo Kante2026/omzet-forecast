@@ -59,6 +59,25 @@ window.supabase={createClient:()=>({auth:{getSession:async()=>({data:{session:{u
   assert.equal(await page.$eval('#yearSelect',e=>e.value),'2026');
   await page.evaluate(()=>editDistribution('werkelijk','w1'));
   await page.$eval('#splitStart',e=>e.value='2026-12');
+  await page.$eval('#splitEnd',e=>e.value='2027-01');
+  // Real submit button, without first clicking Gelijk verdelen.
+  await page.click('#entryForm button[type=submit]');
+  await page.waitForFunction(()=>testDb.werkelijk[0].verdeling?.length===2);
+  assert.deepEqual(await page.evaluate(()=>testDb.werkelijk[0].verdeling),[
+    {year:2026,month:'december',omzet:50,margin:5},
+    {year:2027,month:'januari',omzet:50,margin:5}
+  ]);
+  await page.evaluate(async()=>{await loadData();render()});
+  assert.equal(await page.evaluate(()=>Planning.totals(werkelijkData,[],2026)[11].wo),50);
+  await page.select('#yearSelect','2027');
+  assert.equal(await page.evaluate(()=>Planning.totals(werkelijkData,[],2027)[0].wm),5);
+  await page.evaluate(()=>editEntry('werkelijk','w1'));
+  assert.equal(await page.$eval('#splitEnd',e=>e.value),'2027-01');
+  await page.evaluate(()=>{allocationsDraft[0].omzet=60;allocationsDraft[1].omzet=40;renderDistribution()});
+  await page.evaluate(()=>saveEntry({preventDefault(){}}));
+  assert.equal(await page.evaluate(()=>testDb.werkelijk[0].verdeling[0].omzet),60);
+  await page.evaluate(()=>editDistribution('werkelijk','w1'));
+  await page.$eval('#splitStart',e=>e.value='2026-12');
   await page.$eval('#splitEnd',e=>e.value='2027-02');
   await page.evaluate(()=>distributeDraft());
   await page.evaluate(()=>saveEntry({preventDefault(){}}));

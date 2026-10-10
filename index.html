@@ -305,7 +305,7 @@ th,td{padding:.35rem .3rem}
         <div style="margin-top:1rem">
           <button type="button" class="btn btn-outline" onclick="showDistribution()">Verdeel omzet en marge over maanden</button>
           <div id="distributionPanel" hidden style="margin-top:1rem">
-            <p>De opdracht blijft één geheel. Omzet en marge worden per maand opgeteld, ook over jaargrenzen. Bedragen hieronder zijn ongewogen.</p>
+            <p>Kies de begin- en eindmaand. Bij opslaan worden omzet en marge gelijk over deze maanden verdeeld, ook over jaargrenzen. Via ‘Gelijk verdelen’ kun je de bedragen vooraf bekijken en aanpassen. Een gewijzigde periode verdeelt opnieuw; bij dezelfde periode blijven je maandbedragen behouden. Bedragen zijn ongewogen.</p>
             <div class="form-grid"><div class="form-group"><label for="splitStart">Van maand</label><input type="month" id="splitStart" min="2024-01" max="2100-12"></div>
             <div class="form-group"><label for="splitEnd">Tot en met maand</label><input type="month" id="splitEnd" min="2024-01" max="2100-12"></div></div>
             <button type="button" class="btn btn-outline" onclick="distributeDraft()">Gelijk verdelen</button>
@@ -815,6 +815,7 @@ function openModal(type, item = null) {
   document.getElementById('fYear').value = item?.year ?? currentYear;
   allocationsDraft = structuredClone(item?.allocations || []);
   document.getElementById('distributionPanel').hidden = !allocationsDraft.length;
+  if (allocationsDraft.length) showDistribution();
   renderDistribution();
   document.getElementById('modalOverlay').classList.add('active');
   document.getElementById('fProject').focus();
@@ -829,6 +830,16 @@ async function saveEntry(e) {
   const id = document.getElementById('entryId').value;
   if (id && !isAdmin()) return toast('Alleen admins mogen opdrachten bewerken', true);
   const original = getItems(type).find(r => r.id === id);
+  // Selecting a period and saving must not silently keep the old single month.
+  if (!document.getElementById('distributionPanel').hidden) {
+    try {
+      const start = document.getElementById('splitStart').value;
+      const end = document.getElementById('splitEnd').value;
+      const proposed = Planning.distribute(Number(document.getElementById('fQuantity').value) * Number(document.getElementById('fRate').value), Number(document.getElementById('fMargin').value), start, end);
+      const samePeriod = proposed.length === allocationsDraft.length && proposed.every((p,i) => p.year === allocationsDraft[i].year && p.month === allocationsDraft[i].month);
+      if (!samePeriod) { allocationsDraft = proposed; renderDistribution(); }
+    } catch (err) { return toast('Niet opgeslagen: '+err.message, true); }
+  }
   const entry = {
     project: document.getElementById('fProject').value.trim(),
     client: document.getElementById('fClient').value.trim(),
