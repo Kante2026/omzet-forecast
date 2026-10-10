@@ -44,6 +44,7 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--
 .card{background:var(--white);border-radius:var(--radius-lg);box-shadow:var(--shadow);overflow:hidden}
 .card-header{padding:1rem 1.25rem;border-bottom:1px solid var(--gray-200);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem}
 .card-header h2{font-size:1.1rem;font-weight:700;color:var(--blue-900)}
+.history-arrow{display:inline-block;transition:transform .15s} #historyPanel[open] .history-arrow{transform:rotate(90deg)}
 .table-tools{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
 .table-tools input,.table-tools select{padding:.45rem .6rem;border:1px solid var(--gray-300);border-radius:var(--radius);font-size:.8rem;background:var(--white);color:var(--gray-800)}
 .table-tools input{min-width:220px}
@@ -186,7 +187,7 @@ th,td{padding:.35rem .3rem}
     <div class="card-header">
       <h2>✅ Werkelijke Opdrachten</h2>
       <div class="table-tools"><input id="werkelijkSearch" type="search" placeholder="Zoek project/opdrachtgever..." oninput="render()">
-      <select id="werkelijkFilter" aria-label="Projectstatus" onchange="render()"><option value="active">Lopend</option><option value="completed">Afgerond</option><option value="all" selected>Alles</option></select>
+      <span class="entry-user">Lopende projecten</span>
       <button class="btn btn-primary" onclick="openModal('werkelijk')">+ Toevoegen</button></div>
     </div>
     <div class="table-wrap">
@@ -200,6 +201,18 @@ th,td{padding:.35rem .3rem}
       </table>
     </div>
   </div>
+
+  <details class="card" id="historyPanel" style="margin-bottom:1.5rem">
+    <summary class="card-header" style="cursor:pointer"><h2>Geschiedenis · Afgeronde projecten <span id="historyCount"></span></h2></summary>
+    <div class="card-body">
+      <p class="filter-note">Alle jaren. Afgeronde projecten blijven meetellen in de omzet en marge. Met ‘Heropen project’ zet je ze terug naar Werkelijke omzet.</p>
+      <div class="table-tools"><input id="historySearch" type="search" placeholder="Zoek afgerond project/opdrachtgever..." aria-label="Zoek in geschiedenis" oninput="render()"></div>
+    </div>
+    <div class="table-wrap"><table id="historyTable">
+      <thead><tr><th>Project</th><th>Opdrachtgever</th><th class="num">Hoeveelheid</th><th>Eenheid</th><th class="money">Tarief</th><th class="money">Omzet</th><th class="money">Marge</th><th>Periode</th><th>Ingevoerd door</th><th>Acties</th></tr></thead>
+      <tbody id="historyBody"></tbody><tfoot id="historyFoot"></tfoot>
+    </table></div>
+  </details>
 
   <!-- Forecast -->
   <div class="card">
@@ -586,6 +599,8 @@ function num(n) { return new Intl.NumberFormat('nl-NL').format(n); }
 function render() {
   renderTable('werkelijk');
   renderTable('forecast');
+  renderTable('history');
+  document.getElementById('historyCount').textContent = `(${werkelijkData.filter(r => r.completed).length})`;
   renderSummary();
   renderChart();
 }
@@ -613,6 +628,8 @@ function matchesTableFilter(row, type) {
   const currentIdx = currentMonthIndex();
   const text = `${row.project || ''} ${row.client || ''} ${row.gebruiker || ''} ${row.month || ''}`.toLowerCase();
   if (query && !text.includes(query)) return false;
+  if (type === 'werkelijk') return !row.completed;
+  if (type === 'history') return row.completed;
   if (filter === 'active') return !row.completed;
   if (filter === 'completed') return row.completed;
   const indices = (row.parts || [{month:row.month}]).map(p => monthIndex(p.month));
@@ -636,7 +653,11 @@ function updateFilterNote(type, total, visible) {
 }
 
 function renderTable(type) {
-  const allItems = getItems(type).map(r => Planning.projectYear(r, currentYear)).filter(Boolean);
+  const isHistory = type === 'history';
+  const actionType = isHistory ? 'werkelijk' : type;
+  const allItems = isHistory
+    ? werkelijkData.map(r => ({...r, parts:Planning.slices(r)}))
+    : getItems(type).map(r => Planning.projectYear(r, currentYear)).filter(Boolean);
   const items = allItems.filter(r => matchesTableFilter(r, type));
   const tbody = document.getElementById(type + 'Body');
   const tfoot = document.getElementById(type + 'Foot');
@@ -645,7 +666,7 @@ function renderTable(type) {
   updateFilterNote(type, allItems.length, items.length);
 
   if (!items.length) {
-    tbody.innerHTML = `<tr><td colspan="${isForecast ? 13 : 10}" class="empty-state">Geen opdrachten in deze weergave. Kies "Alles" of "Archief" om oude projecten te zien.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${isForecast ? 13 : 10}" class="empty-state">${isHistory ? 'Geen afgeronde projecten gevonden.' : isForecast ? 'Geen forecastopdrachten in deze weergave.' : 'Geen lopende projecten gevonden. Afgeronde projecten staan in Geschiedenis.'}</td></tr>`;
     tfoot.innerHTML = '';
     return;
   }
@@ -673,11 +694,11 @@ function renderTable(type) {
 
     // Rechten: iedereen kan verwijderen, alleen admin kan bewerken/omzetten
     const convertBtn = (isForecast && admin) ? `<button class="btn btn-success btn-xs" onclick="convertToWerkelijk('${r.id}')" title="Omzetten naar werkelijk">✓ Omzetten</button>` : '';
-    const revertBtn = (!isForecast && admin) ? `<button class="btn btn-outline btn-xs" onclick="convertToForecast('${r.id}')" title="Terugzetten naar forecast" style="border-color:#f59e0b;color:#d97706">↩ Terug</button>` : '';
+    const revertBtn = (!isForecast && !isHistory && admin) ? `<button class="btn btn-outline btn-xs" onclick="convertToForecast('${r.id}')" title="Terugzetten naar forecast" style="border-color:#f59e0b;color:#d97706">↩ Terug</button>` : '';
     const completedBtn = (!isForecast && admin) ? `<button class="btn btn-success btn-xs" onclick="toggleCompleted('${r.id}')">${r.completed ? 'Heropen project' : 'Project afgerond'}</button>` : '';
-    const spreadBtn = admin ? `<button class="btn btn-outline btn-xs" onclick="editDistribution('${type}','${r.id}')">Verdelen</button>` : '';
-    const editBtn = admin ? `<button class="btn btn-outline btn-xs" onclick="editEntry('${type}','${r.id}')" title="Bewerken">✏️</button>` : '';
-    const deleteBtn = `<button class="btn btn-danger btn-xs" onclick="deleteEntry('${type}','${r.id}')" title="Verwijderen">🗑</button>`;
+    const spreadBtn = (admin && !isHistory) ? `<button class="btn btn-outline btn-xs" onclick="editDistribution('${actionType}','${r.id}')">Verdelen</button>` : '';
+    const editBtn = (admin && !isHistory) ? `<button class="btn btn-outline btn-xs" onclick="editEntry('${actionType}','${r.id}')" title="Bewerken">✏️</button>` : '';
+    const deleteBtn = isHistory ? '' : `<button class="btn btn-danger btn-xs" onclick="deleteEntry('${type}','${r.id}')" title="Verwijderen">🗑</button>`;
 
     return `<tr>
       <td><strong>${esc(r.project)}</strong>${r.completed ? '<div class="kans-badge kans-high">Afgerond</div>' : ''}</td>
@@ -687,7 +708,7 @@ function renderTable(type) {
       <td class="money">${eurFull(r.rate)}</td>
       <td class="money">${eur(omzet)}</td>
       <td class="money positive">${eur(r.margin)}</td>
-      <td>${r.parts.map(p => esc(p.month)).join(", ")} ${currentYear}${r.allocations.length ? '<div class="entry-user">Bedragen: dit jaar · hoeveelheid: hele opdracht</div>' : ''}</td>
+      <td>${isHistory ? r.parts.map(p => `${esc(p.month)} ${p.year}`).join(', ') : r.parts.map(p => esc(p.month)).join(', ') + ' ' + currentYear}${(!isHistory && r.allocations.length) ? '<div class="entry-user">Bedragen: dit jaar · hoeveelheid: hele opdracht</div>' : ''}</td>
       <td>${r.gebruiker ? esc(r.gebruiker) : '-'}</td>
       ${forecastCols}
       <td><div class="actions-cell">
@@ -839,8 +860,8 @@ async function saveEntry(e) {
     if (index < 0) list.push(row); else list[index] = row;
     currentYear = entry.year;
     refreshYearOptions();
-    if (type === 'werkelijk') document.getElementById('werkelijkFilter').value = 'all';
-    else document.getElementById('forecastFilter').value = 'all';
+
+    if (type === 'forecast') document.getElementById('forecastFilter').value = 'all';
     document.getElementById(type+'Search').value = '';
     setSyncStatus('connected'); render(); closeModal();
     toast(id ? 'Opdracht bijgewerkt' : 'Opdracht toegevoegd');
@@ -1014,7 +1035,14 @@ async function toggleCompleted(id) {
     if (!data?.length) throw Error('Geen wijziging opgeslagen.');
     const index = werkelijkData.findIndex(r => r.id === id);
     if (index >= 0) werkelijkData[index] = dbToJs(data[0], 'werkelijk');
-    render(); toast(data[0].afgerond ? 'Project afgerond; omzet en marge blijven meetellen.' : 'Project heropend');
+    if (!data[0].afgerond) {
+      if (!Planning.projectYear(row, currentYear)) currentYear = Planning.slices(row)[0].year;
+      refreshYearOptions();
+      document.getElementById('werkelijkSearch').value = '';
+    }
+    render();
+    if (!data[0].afgerond) document.getElementById('werkelijkTable').scrollIntoView({behavior:'smooth',block:'center'});
+    toast(data[0].afgerond ? 'Project verplaatst naar Geschiedenis; omzet en marge blijven meetellen.' : 'Project heropend');
   } catch(err) { toast('Niet opgeslagen: '+err.message,true); }
   finally {saveBusy=false;}
 }
